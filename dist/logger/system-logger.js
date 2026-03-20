@@ -1,0 +1,31 @@
+import { createLogger } from "./create-logger.js";
+import * as path from "path";
+let logger = null;
+export function initSystemLogger(logDir, level, maxSizeMb, keepDays) {
+    logger = createLogger({
+        filename: path.join(logDir, "system-%DATE%.log"),
+        level,
+        maxSize: `${maxSizeMb}m`,
+        maxFiles: `${keepDays}d`,
+    });
+}
+export const systemLogger = {
+    info(event, meta) {
+        getLogger().info({ event, ...meta });
+    },
+    warn(event, meta) {
+        getLogger().warn({ event, ...meta });
+    },
+    error(event, meta) {
+        getLogger().error({ event, ...meta });
+    },
+    debug(event, meta) {
+        getLogger().debug({ event, ...meta });
+    },
+};
+function getLogger() {
+    if (!logger) {
+        throw new Error("System logger not initialized. Call initSystemLogger() first.");
+    }
+    return logger;
+}
