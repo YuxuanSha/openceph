@@ -159,12 +159,35 @@ export class MemorySearchEngine {
     `)
 
     const rows = statement.all(matchQuery, topK) as Array<Record<string, unknown>>
-    return rows.map((row) => ({
+    const mapped = rows.map((row) => ({
       source: String(row.source),
       section: String(row.section ?? ""),
       memoryId: row.memory_id ? String(row.memory_id) : null,
       content: String(row.content ?? ""),
       score: Number(row.score ?? 0),
+    }))
+    if (mapped.length > 0) {
+      return mapped
+    }
+
+    const fallback = this.db!.prepare(`
+      SELECT
+        source,
+        section,
+        memory_id,
+        chunk_text as content
+      FROM memory_chunks
+      WHERE chunk_text LIKE ?
+        ${includeTranscripts ? "" : "AND source NOT LIKE 'transcript:%'"}
+      LIMIT ?
+    `).all(`%${query}%`, topK) as Array<Record<string, unknown>>
+
+    return fallback.map((row, index) => ({
+      source: String(row.source),
+      section: String(row.section ?? ""),
+      memoryId: row.memory_id ? String(row.memory_id) : null,
+      content: String(row.content ?? ""),
+      score: topK - index,
     }))
   }
 

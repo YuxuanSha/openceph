@@ -4,6 +4,7 @@ export declare class FeishuChannelPlugin implements ChannelPlugin {
     readonly displayName = "\u98DE\u4E66 (Feishu)";
     readonly defaultDmPolicy: DmPolicy;
     private client;
+    private directClient;
     private wsClient;
     private config;
     private messageHandler;
@@ -29,4 +30,6 @@ export declare class FeishuChannelPlugin implements ChannelPlugin {
     validateSender(senderId: string, policy: DmPolicy, allowFrom: string[]): boolean;
     private resolveSendTarget;
     private sendReplyOrDirect;
+    private sendReplyOrDirectWithClient;
+    private sendDirectWithClient;
 }

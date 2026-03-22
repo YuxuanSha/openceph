@@ -91,5 +91,9 @@ function expandPaths(config) {
             ...config.tentacle,
             ipcSocketPath: expand(config.tentacle.ipcSocketPath),
         },
+        cron: {
+            ...config.cron,
+            store: expand(config.cron.store),
+        },
     };
 }

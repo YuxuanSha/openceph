@@ -14,6 +14,7 @@ export interface TentacleRegistryEntry {
   directory?: string
   lastReport?: string
   health?: string
+  scheduleConfig?: string
 }
 
 export class TentacleRegistry {
@@ -51,6 +52,7 @@ export class TentacleRegistry {
             directory: extraFields?.directory ?? entry.directory,
             lastReport: extraFields?.lastReport ?? entry.lastReport,
             health: extraFields?.health ?? entry.health,
+            scheduleConfig: extraFields?.scheduleConfig ?? entry.scheduleConfig,
           }
         : entry
     )
@@ -77,6 +79,7 @@ export class TentacleRegistry {
       `- **目录：** ${entry.directory ?? "-"}`,
       `- **最后上报：** ${entry.lastReport ?? "-"}`,
       `- **健康度：** ${entry.health ?? "-"}`,
+      `- **调度：** ${entry.scheduleConfig ?? "-"}`,
     ].join("\n")
 
     const content = [
@@ -90,6 +93,7 @@ export class TentacleRegistry {
       "",
     ].join("\n")
 
+    await fs.mkdir(this.workspaceDir, { recursive: true })
     await fs.writeFile(this.registryPath, content, "utf-8")
   }
 }
@@ -121,6 +125,7 @@ function parseRegistry(content: string): TentacleRegistryEntry[] {
       if (key === "目录") record.directory = value
       if (key === "最后上报") record.lastReport = value
       if (key === "健康度") record.health = value
+      if (key === "调度") record.scheduleConfig = value
     }
     entries.push(record)
   }

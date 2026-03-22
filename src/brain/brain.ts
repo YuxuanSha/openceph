@@ -1,5 +1,6 @@
 import { createBrainSession, type BrainSession } from "../pi/pi-session.js"
 import type { PiContext } from "../pi/pi-context.js"
+import { resolveRunnableModel } from "../pi/model-resolver.js"
 import type { OpenCephConfig } from "../config/config-schema.js"
 import { SessionStoreManager } from "../session/session-store.js"
 import { ToolRegistry } from "../tools/index.js"
@@ -11,9 +12,11 @@ import { createSessionTools } from "../tools/session-tools.js"
 import { createHeartbeatTools } from "../tools/heartbeat-tools.js"
 import { createTentacleTools } from "../tools/tentacle-tools.js"
 import { createCodeTools } from "../tools/code-tools.js"
+import { createCronTools } from "../tools/cron-tools.js"
 import { assembleSystemPrompt, type SystemPromptOptions } from "./system-prompt.js"
 import { isNewWorkspace } from "./context-assembler.js"
 import { brainLogger, costLogger, writeCacheTrace } from "../logger/index.js"
+import { updateRuntimeStatus } from "../logger/runtime-status-store.js"
 import { IpcServer } from "../tentacle/ipc-server.js"
 import { TentacleRegistry } from "../tentacle/registry.js"
 import { PendingReportsQueue } from "../tentacle/pending-reports.js"
@@ -21,10 +24,24 @@ import { TentacleManager } from "../tentacle/manager.js"
 import { LoopDetector } from "./loop-detection.js"
 import { SkillLoader } from "../skills/skill-loader.js"
 import { SkillSpawner } from "../skills/skill-spawner.js"
-import { detectRuntimes } from "../tentacle/runtime-detector.js"
+import { CodeAgent } from "../code-agent/code-agent.js"
 import * as os from "os"
 import * as fs from "fs/promises"
 import * as path from "path"
+import * as crypto from "crypto"
+import type { CronScheduler } from "../cron/cron-scheduler.js"
+import type { HeartbeatScheduler } from "../heartbeat/scheduler.js"
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core"
+import { OutboundQueue, type ApprovedPushItem } from "../push/outbound-queue.js"
+import { PushDecisionEngine, type PushTrigger } from "../push/push-decision.js"
+import { PushFeedbackTracker, detectFeedbackSignal } from "../push/feedback-tracker.js"
+import { TentacleHealthCalculator } from "../tentacle/health-score.js"
+import { TentacleLifecycleManager } from "../tentacle/lifecycle.js"
+import { TentacleReviewEngine } from "../tentacle/review-engine.js"
+import { ModelFailover, type FailoverDecision } from "./failover.js"
+import type { ConsultationReplyPayload, ConsultationRequestPayload } from "../tentacle/contract.js"
+import { MemoryManager } from "../memory/memory-manager.js"
+import { ConsultationSessionStore, type ConsultationSessionRecord } from "../tentacle/consultation-session-store.js"
 
 export interface BrainOptions {
   config: OpenCephConfig
@@ -39,6 +56,8 @@ export interface BrainInput {
   sessionKey: string
   isDm: boolean
   onTextDelta?: (delta: string) => void
+  thinkingLevelOverride?: ThinkingLevel
+  reasoningEnabledOverride?: boolean
 }
 
 export interface ToolCallRecord {
@@ -86,10 +105,28 @@ export class Brain {
   private tentacleManager: TentacleManager
   private skillLoader: SkillLoader
   private skillSpawner: SkillSpawner | null = null
+  private cronScheduler: CronScheduler | null = null
+  private heartbeatScheduler: HeartbeatScheduler | null = null
+  private currentThinkingLevel: ThinkingLevel = "off"
+  private reasoningEnabled = false
+  private turnsSinceHeartbeat = 0
+  private outboundQueue: OutboundQueue
+  private pushEngine: PushDecisionEngine
+  private feedbackTracker: PushFeedbackTracker
+  private healthCalculator: TentacleHealthCalculator
+  private lifecycleManager: TentacleLifecycleManager | null = null
+  private reviewEngine: TentacleReviewEngine | null = null
+  private modelFailover: ModelFailover
+  private recentPushContext: Map<string, { messageId: string; itemIds: string[]; tentacleIds: string[]; deliveredAt: string }> = new Map()
+  private readonly deliverToUser?: GatewayDeliveryFn
+  private readonly memoryManager: MemoryManager
+  private readonly consultationStore: ConsultationSessionStore
+  private readonly pushMessageToConsultationSession: Map<string, string> = new Map()
 
   constructor(options: BrainOptions) {
     this.config = options.config
     this.piCtx = options.piCtx
+    this.deliverToUser = options.deliverToUser
     this.currentModel = options.config.agents.defaults.model.primary
     this.sessionStore = new SessionStoreManager("ceph")
     this.toolRegistry = new ToolRegistry()
@@ -103,6 +140,18 @@ export class Brain {
       this.pendingReports,
     )
     this.skillLoader = new SkillLoader(options.config.skills.paths)
+    this.modelFailover = new ModelFailover(options.config)
+    this.consultationStore = new ConsultationSessionStore(path.join(os.homedir(), ".openceph", "state", "consultations.json"))
+
+    // Initialize push system
+    this.outboundQueue = new OutboundQueue(path.join(os.homedir(), ".openceph", "state", "outbound-queue.json"))
+    this.healthCalculator = new TentacleHealthCalculator(this.tentacleManager, this.pendingReports)
+    this.feedbackTracker = new PushFeedbackTracker(
+      path.join(options.piCtx.workspaceDir, "memory"),
+      this.healthCalculator,
+    )
+    this.memoryManager = new MemoryManager(options.piCtx.workspaceDir)
+    this.pushEngine = new PushDecisionEngine(options.config, this.outboundQueue, this.memoryManager, this.sessionStore)
 
     // Register memory tools
     for (const entry of createMemoryTools({
@@ -143,20 +192,59 @@ export class Brain {
   async initialize(): Promise<void> {
     await this.ipcServer.start()
     await this.tentacleManager.restoreFromRegistry()
+    this.tentacleManager.setConsultationHandler(async ({ tentacleId, payload }) => {
+      return this.handleTentacleConsultation(tentacleId, payload)
+    })
+    this.tentacleManager.setAdjustmentHandler(async ({ tentacleId, adjustment, currentSchedule }) => {
+      const output = await this.runIsolatedTurn({
+        sessionKey: `adjustment:${tentacleId}`,
+        mode: "minimal",
+        message: [
+          `Tentacle adjustment request from ${tentacleId}.`,
+          `Current schedule: ${JSON.stringify(currentSchedule ?? null)}`,
+          `Adjustment: ${JSON.stringify(adjustment)}`,
+          'Reply with exactly one word: "approve" or "reject".',
+        ].join("\n"),
+      })
+      const approved = output.text.toLowerCase().includes("approve")
+      brainLogger.info(approved ? "tentacle_adjustment_approved" : "tentacle_adjustment_rejected", {
+        tentacle_id: tentacleId,
+        type: adjustment.type,
+      })
+      return approved
+    })
     await this.skillLoader.loadAll()
 
     if (!this.skillSpawner) {
+      const codeAgent = new CodeAgent(this.piCtx, this.config)
       this.skillSpawner = new SkillSpawner(
         this.config,
         this.skillLoader,
         this.tentacleManager,
-        await detectRuntimes(),
+        codeAgent,
+      )
+
+      // Initialize lifecycle and review engines
+      this.lifecycleManager = new TentacleLifecycleManager(
+        this.tentacleManager,
+        this.cronScheduler,
+        codeAgent,
+        this.tentacleRegistry,
+        this.healthCalculator,
+      )
+      this.reviewEngine = new TentacleReviewEngine(
+        this.tentacleManager,
+        this.healthCalculator,
+        this.memoryManager,
+        this.outboundQueue,
       )
 
       for (const entry of createTentacleTools(
         this.tentacleManager,
         this.config.logging.logDir,
         this.skillSpawner,
+        this.lifecycleManager,
+        this.reviewEngine,
       )) {
         this.toolRegistry.register(entry)
       }
@@ -238,62 +326,213 @@ export class Brain {
   }
 
   async handleMessage(input: BrainInput): Promise<BrainOutput> {
-    const startTime = Date.now()
-    this.lastActiveChannel = input.channel
-    this.lastActiveSenderId = input.senderId
+    await this.processConsultationUserReply(input)
 
-    // Ensure session exists
-    const sessionEntry = await this.sessionStore.getOrCreate(input.sessionKey, {
-      model: this.currentModel,
-      origin: { channel: input.channel, senderId: input.senderId },
-    })
-    this.currentSessionKey = input.sessionKey
-
-    // Assemble system prompt
-    const newWs = await isNewWorkspace(this.piCtx.workspaceDir)
-    const promptOptions: SystemPromptOptions = {
-      mode: "full",
-      channel: input.channel,
-      isDm: input.isDm,
-      isNewWorkspace: newWs,
-      model: this.currentModel,
-      thinkingLevel: "off",
-      hostname: os.hostname(),
-      nodeVersion: process.version,
-      osPlatform: process.platform,
-      osArch: process.arch,
-      tentacleSummary: this.listTentacles().length > 0
-        ? this.listTentacles().map((item) => `${item.tentacleId} (${item.status})`).join("\n")
-        : undefined,
-      skillsSummary: await this.loadSkillsSummary(),
+    // Check for push feedback signals in user message
+    const feedbackSignal = detectFeedbackSignal(input.text)
+    if (feedbackSignal) {
+      brainLogger.info("push_feedback_signal_detected", { signal: feedbackSignal })
+      await this.recordFeedbackForRecentPush(input.channel, input.senderId, feedbackSignal)
     }
-    const systemPrompt = await assembleSystemPrompt(
-      this.piCtx.workspaceDir,
-      promptOptions,
-      this.toolRegistry,
-    )
 
-    // Create or reuse brain session
+    const output = await this.executeTurn({
+      text: input.text,
+      channel: input.channel,
+      senderId: input.senderId,
+      sessionKey: input.sessionKey,
+      isDm: input.isDm,
+      onTextDelta: input.onTextDelta,
+      mode: "full",
+      model: this.currentModel,
+      thinkingLevel: input.thinkingLevelOverride,
+      reasoningEnabled: input.reasoningEnabledOverride,
+    })
+
+    // After handling user message, check if there's pending push content
+    try {
+      const pushDecision = await this.pushEngine.evaluate({
+        type: "user_message",
+        lastInteractionAt: new Date().toISOString(),
+      })
+      if (pushDecision.shouldPush && pushDecision.consolidatedText) {
+        // Append push content to the reply
+        output.text += `\n\n---\n📬 **触手动态：**\n${pushDecision.consolidatedText}`
+        // Mark items as sent
+        await this.outboundQueue.markSentBatch(pushDecision.items.map((i) => i.itemId))
+        await this.pushEngine.recordPush()
+        this.rememberDeliveredPush(input.channel, input.senderId, pushDecision.items)
+        brainLogger.info("push_delivered_piggyback", {
+          item_count: pushDecision.items.length,
+          trigger: "user_message",
+        })
+      }
+    } catch (err: any) {
+      brainLogger.warn("push_evaluate_error", { error: err.message })
+    }
+
+    return output
+  }
+
+  async runHeartbeatTurn(text: string): Promise<BrainOutput> {
+    const { modelId } = resolveRunnableModel({
+      piCtx: this.piCtx,
+      config: this.config,
+      preferredModel: this.config.heartbeat.model,
+    })
+    return this.executeTurn({
+      text,
+      channel: "system",
+      senderId: "system:heartbeat",
+      sessionKey: `agent:ceph:${this.config.session.mainKey}`,
+      isDm: true,
+      mode: "full",
+      model: modelId,
+    })
+  }
+
+  async runIsolatedTurn(params: {
+    sessionKey: string
+    message: string
+    model?: string
+    mode?: "full" | "minimal"
+    thinking?: string
+  }): Promise<BrainOutput> {
+    const resolution = resolveRunnableModel({
+      piCtx: this.piCtx,
+      config: this.config,
+      preferredModel: params.model ?? this.config.heartbeat.model,
+    })
+    const model = resolution.modelId
+    const cronSessionStore = new SessionStoreManager("cron")
+    const sessionEntry = await cronSessionStore.getOrCreate(params.sessionKey, {
+      model,
+      origin: { channel: "cron", senderId: "cron:system" },
+    })
+    const customTools = this.toolRegistry.getPiTools()
+    const session = await createBrainSession(this.piCtx, this.config, {
+      sessionFilePath: cronSessionStore.getTranscriptPath(sessionEntry.sessionId),
+      modelId: model,
+      systemPrompt: await this.buildSystemPrompt({
+        channel: "cron",
+        isDm: true,
+        model,
+        mode: params.mode ?? "minimal",
+        thinkingLevel: normalizeThinkingLevel(params.thinking ?? this.currentThinkingLevel),
+        reasoningEnabled: this.reasoningEnabled,
+      }),
+      customTools,
+      thinkingLevel: normalizeThinkingLevel(params.thinking ?? this.currentThinkingLevel),
+    })
+
+    let replyText = ""
+    let errorMessage = ""
+    const toolCalls: ToolCallRecord[] = []
+    const unsubscribe = session.session.subscribe((event: any) => {
+      if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
+        replyText += event.assistantMessageEvent.delta
+      } else if (event.type === "message_complete" && event.message?.errorMessage) {
+        errorMessage = event.message.errorMessage
+      } else if (event.type === "tool_execution_end") {
+        toolCalls.push({ name: event.toolName, success: !event.isError })
+      }
+    })
+
+    const statsBefore = session.session.getSessionStats()
+    const startedAt = Date.now()
+    try {
+      await session.session.prompt(params.message)
+    } finally {
+      unsubscribe()
+    }
+    const statsAfter = session.session.getSessionStats()
+    const inputTokens = statsAfter.tokens.input - statsBefore.tokens.input
+    const outputTokens = statsAfter.tokens.output - statsBefore.tokens.output
+    const cacheReadTokens = statsAfter.tokens.cacheRead - statsBefore.tokens.cacheRead
+    const cacheWriteTokens = statsAfter.tokens.cacheWrite - statsBefore.tokens.cacheWrite
+    await cronSessionStore.updateTokens(params.sessionKey, { input: inputTokens, output: outputTokens })
+
+    return {
+      text: replyText,
+      errorMessage: errorMessage || undefined,
+      toolCalls,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      model,
+      durationMs: Date.now() - startedAt,
+    }
+  }
+
+  async registerCronScheduler(cronScheduler: CronScheduler): Promise<void> {
+    this.cronScheduler = cronScheduler
+    this.tentacleManager.setCronScheduler(cronScheduler)
+    for (const entry of createCronTools(cronScheduler)) {
+      this.toolRegistry.register(entry)
+    }
+    await this.syncToolsMd()
+  }
+
+  registerHeartbeatScheduler(heartbeatScheduler: HeartbeatScheduler): void {
+    this.heartbeatScheduler = heartbeatScheduler
+  }
+
+  private async executeTurn(params: {
+    text: string
+    channel: string
+    senderId: string
+    sessionKey: string
+    isDm: boolean
+    onTextDelta?: (delta: string) => void
+    mode: "full" | "minimal"
+    model: string
+    thinkingLevel?: ThinkingLevel
+    reasoningEnabled?: boolean
+  }): Promise<BrainOutput> {
+    const startTime = Date.now()
+    if (!params.senderId.startsWith("system:")) {
+      this.lastActiveChannel = params.channel
+      this.lastActiveSenderId = params.senderId
+    }
+
+    const sessionEntry = await this.sessionStore.getOrCreate(params.sessionKey, {
+      model: params.model,
+      origin: { channel: params.channel, senderId: params.senderId },
+    })
+    this.currentSessionKey = params.sessionKey
+    const failoverDecision = this.modelFailover.checkContextLimit(this.totalInputTokens + this.totalOutputTokens, this.currentModel)
+    if (failoverDecision.action === "switch" && failoverDecision.suggestedModel) {
+      this.currentModel = failoverDecision.suggestedModel
+      params.model = failoverDecision.suggestedModel
+    }
+
+    const systemPrompt = await this.buildSystemPrompt({
+      channel: params.channel,
+      isDm: params.isDm,
+      model: params.model,
+      mode: params.mode,
+      thinkingLevel: params.thinkingLevel ?? this.currentThinkingLevel,
+      reasoningEnabled: params.reasoningEnabled ?? this.reasoningEnabled,
+    })
+
     if (!this.session) {
       const customTools = this.toolRegistry.getPiTools()
       brainLogger.info("session_create", {
         session_id: sessionEntry.sessionId,
-        model: this.currentModel,
+        model: params.model,
         custom_tools_count: customTools.length,
-        custom_tool_names: customTools.map(t => t.name),
+        custom_tool_names: customTools.map((t) => t.name),
       })
       this.session = await createBrainSession(this.piCtx, this.config, {
         sessionFilePath: this.sessionStore.getTranscriptPath(sessionEntry.sessionId),
-        modelId: this.currentModel,
+        modelId: params.model,
         systemPrompt,
         customTools,
+        thinkingLevel: params.thinkingLevel ?? this.currentThinkingLevel,
       })
     }
+    this.session.session.setThinkingLevel(params.thinkingLevel ?? this.currentThinkingLevel)
 
-    // System prompt is set at session creation; extensions (memory-injector)
-    // dynamically update it via before_agent_start hook each turn
-
-    // Collect output
     let replyText = ""
     let errorMessage = ""
     const toolCalls: ToolCallRecord[] = []
@@ -310,7 +549,7 @@ export class Brain {
         case "message_update":
           if (event.assistantMessageEvent?.type === "text_delta") {
             replyText += event.assistantMessageEvent.delta
-            input.onTextDelta?.(event.assistantMessageEvent.delta)
+            params.onTextDelta?.(event.assistantMessageEvent.delta)
           }
           break
         case "message_complete":
@@ -361,17 +600,14 @@ export class Brain {
     })
 
     brainLogger.info("streaming_start", { session_id: sessionEntry.sessionId })
-
-    // Capture token counts before prompt for computing deltas
     const statsBefore = this.session.session.getSessionStats()
 
     try {
-      await this.session.session.prompt(input.text)
+      await this.session.session.prompt(params.text)
     } finally {
       unsubscribe()
     }
 
-    // Compute token usage delta for this turn
     const statsAfter = this.session.session.getSessionStats()
     inputTokens = statsAfter.tokens.input - statsBefore.tokens.input
     outputTokens = statsAfter.tokens.output - statsBefore.tokens.output
@@ -388,11 +624,11 @@ export class Brain {
       chars: replyText.length,
       duration_ms: durationMs,
     })
+    await this.writeRuntimeStatus()
 
-    // Write cost log
     costLogger.info("api_call", {
       session_id: sessionEntry.sessionId,
-      model: this.currentModel,
+      model: params.model,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       cache_read_tokens: cacheReadTokens,
@@ -400,11 +636,10 @@ export class Brain {
       duration_ms: durationMs,
     })
 
-    // Write cache trace
     if (this.config.logging.cacheTrace) {
       writeCacheTrace({
         session_id: sessionEntry.sessionId,
-        model: this.currentModel,
+        model: params.model,
         cache_read_tokens: cacheReadTokens,
         cache_write_tokens: cacheWriteTokens,
         input_tokens: inputTokens,
@@ -412,13 +647,23 @@ export class Brain {
       })
     }
 
-    // Update session token counts
-    await this.sessionStore.updateTokens(input.sessionKey, {
+    await this.sessionStore.updateTokens(params.sessionKey, {
       input: inputTokens,
       output: outputTokens,
     })
     this.totalInputTokens += inputTokens
     this.totalOutputTokens += outputTokens
+    if (!params.senderId.startsWith("system:") && params.channel !== "cron") {
+      this.turnsSinceHeartbeat++
+      if (
+        this.heartbeatScheduler &&
+        this.config.heartbeat.checkAfterTurns > 0 &&
+        this.turnsSinceHeartbeat >= this.config.heartbeat.checkAfterTurns
+      ) {
+        this.turnsSinceHeartbeat = 0
+        void this.heartbeatScheduler.triggerNow()
+      }
+    }
 
     return {
       text: replyText,
@@ -428,7 +673,7 @@ export class Brain {
       outputTokens,
       cacheReadTokens,
       cacheWriteTokens,
-      model: this.currentModel,
+      model: params.model,
       durationMs,
     }
   }
@@ -470,8 +715,460 @@ export class Brain {
     return this.currentModel
   }
 
+  get thinkingLevel(): ThinkingLevel {
+    return this.currentThinkingLevel
+  }
+
+  get reasoningMode(): boolean {
+    return this.reasoningEnabled
+  }
+
   listTentacles(): ReturnType<TentacleManager["listAll"]> {
     return this.tentacleManager.listAll()
+  }
+
+  async listSkills(): Promise<string[]> {
+    const skills = await this.skillLoader.loadAll()
+    return skills.map((skill) => skill.name)
+  }
+
+  listToolNames(): string[] {
+    return this.toolRegistry.getAll().map((entry) => entry.name).sort()
+  }
+
+  getLastActiveTarget(channel = "last"): { channel: string; senderId: string; recipientId?: string } | null {
+    return {
+      channel: channel === "last" ? this.lastActiveChannel : channel,
+      senderId: this.lastActiveSenderId,
+      recipientId: this.lastActiveSenderId,
+    }
+  }
+
+  async triggerTentacleCron(tentacleId: string, jobId: string): Promise<boolean> {
+    return this.tentacleManager.triggerCronJob(jobId, tentacleId)
+  }
+
+  async triggerTentacleHeartbeat(tentacleId: string, prompt: string, jobId: string): Promise<boolean> {
+    return this.tentacleManager.triggerHeartbeatReview(tentacleId, prompt, jobId)
+  }
+
+  getTentacleManager(): TentacleManager {
+    return this.tentacleManager
+  }
+
+  async getPendingReportCount(): Promise<number> {
+    return this.pendingReports.size()
+  }
+
+  getOutboundQueue(): OutboundQueue {
+    return this.outboundQueue
+  }
+
+  getPushEngine(): PushDecisionEngine {
+    return this.pushEngine
+  }
+
+  getFeedbackTracker(): PushFeedbackTracker {
+    return this.feedbackTracker
+  }
+
+  getHealthCalculator(): TentacleHealthCalculator {
+    return this.healthCalculator
+  }
+
+  getReviewEngine(): TentacleReviewEngine | null {
+    return this.reviewEngine
+  }
+
+  /**
+   * Evaluate push decision for non-user-message triggers (heartbeat, daily-review, urgent).
+   */
+  async evaluatePush(trigger: PushTrigger): Promise<string | null> {
+    const decision = await this.pushEngine.evaluate(trigger)
+    if (!decision.shouldPush || !decision.consolidatedText) return null
+
+    await this.outboundQueue.markSentBatch(decision.items.map((i) => i.itemId))
+    await this.pushEngine.recordPush()
+    this.rememberDeliveredPush(this.lastActiveChannel, this.lastActiveSenderId, decision.items)
+    brainLogger.info("push_delivered", {
+      item_count: decision.items.length,
+      trigger_type: trigger.type,
+      reason: decision.reason,
+    })
+    return decision.consolidatedText
+  }
+
+  async runDailyReviewAutomation(): Promise<string> {
+    const sections: string[] = []
+
+    if (this.reviewEngine && this.lifecycleManager) {
+      const actions = await this.reviewEngine.review()
+      const applied: string[] = []
+
+      for (const action of actions) {
+        if (action.requiresUserConfirm) continue
+        if (action.action === "weaken") {
+          await this.lifecycleManager.weaken(action.tentacleId)
+          applied.push(`${action.tentacleId}: weaken`)
+        } else if (action.action === "strengthen") {
+          await this.lifecycleManager.strengthen(action.tentacleId, {})
+          applied.push(`${action.tentacleId}: strengthen`)
+        }
+      }
+
+      if (applied.length > 0) {
+        sections.push(`Review actions applied:\n- ${applied.join("\n- ")}`)
+      }
+    }
+
+    const pushText = await this.evaluatePush({ type: "daily_review" })
+    if (pushText) {
+      sections.push(`Pending push digest:\n${pushText}`)
+    }
+
+    return sections.length > 0 ? sections.join("\n\n") : "HEARTBEAT_OK"
+  }
+
+  async runMorningDigestFallback(): Promise<string> {
+    const pushText = await this.evaluatePush({ type: "daily_review" })
+    return pushText ?? "HEARTBEAT_OK"
+  }
+
+  setThinkingLevel(level: string): ThinkingLevel {
+    this.currentThinkingLevel = normalizeThinkingLevel(level)
+    this.session?.session.setThinkingLevel(this.currentThinkingLevel)
+    return this.currentThinkingLevel
+  }
+
+  setReasoningEnabled(enabled: boolean): void {
+    this.reasoningEnabled = enabled
+  }
+
+  async compactSession(customInstructions?: string): Promise<string> {
+    if (!this.session) {
+      return "Nothing to compact."
+    }
+    try {
+      const result = await this.session.session.compact(customInstructions)
+
+      // Check if post-compaction tokens still exceed limit → failover
+      const totalTokens = this.totalInputTokens + this.totalOutputTokens
+      const failoverDecision = this.modelFailover.checkContextLimit(totalTokens, this.currentModel)
+      if (failoverDecision.action === "switch" && failoverDecision.suggestedModel) {
+        this.currentModel = failoverDecision.suggestedModel
+        brainLogger.info("model_failover_after_compact", {
+          new_model: this.currentModel,
+          reason: failoverDecision.reason,
+        })
+        return `Compacted session. Tokens before: ${result.tokensBefore}. Switched to ${this.currentModel} due to context pressure.`
+      }
+
+      return `Compacted session. Tokens before: ${result.tokensBefore}.`
+    } catch (err: any) {
+      brainLogger.error("compaction_failed_fallback", {
+        error: err.message,
+        session_key: this.currentSessionKey,
+      })
+
+      try {
+        await this.sessionStore.reset(this.currentSessionKey, "manual")
+        this.session = null
+        return "对话历史已重置，重要信息已保存到记忆中。"
+      } catch (resetErr: any) {
+        brainLogger.error("compaction_fallback_reset_failed", { error: resetErr.message })
+        return `Compaction failed: ${err.message}. Session reset also failed.`
+      }
+    }
+  }
+
+  /**
+   * Check context pressure and potentially switch to fallback model.
+   * Called periodically or after heavy turns.
+   */
+  checkAndFailover(): FailoverDecision {
+    const totalTokens = this.totalInputTokens + this.totalOutputTokens
+    const decision = this.modelFailover.checkContextLimit(totalTokens, this.currentModel)
+    if (decision.action === "switch" && decision.suggestedModel) {
+      this.currentModel = decision.suggestedModel
+    }
+    return decision
+  }
+
+  private async writeRuntimeStatus(): Promise<void> {
+    await updateRuntimeStatus((current) => ({
+      ...current,
+      brain: {
+        running: true,
+        pid: process.pid,
+        model: this.currentModel,
+        sessionKey: this.currentSessionKey,
+        inputTokens: this.totalInputTokens,
+        outputTokens: this.totalOutputTokens,
+        updatedAt: new Date().toISOString(),
+      },
+    }))
+  }
+
+  async runCronJob(jobId: string): Promise<void> {
+    if (!this.cronScheduler) {
+      throw new Error("Cron scheduler not ready")
+    }
+    await this.cronScheduler.runJob(jobId, "force")
+  }
+
+  getCronJob(jobId: string) {
+    return this.cronScheduler?.getJob(jobId)
+  }
+
+  private async handleTentacleConsultation(
+    tentacleId: string,
+    payload: ConsultationRequestPayload,
+  ): Promise<ConsultationReplyPayload> {
+    const session = await this.upsertConsultationSession(tentacleId, payload)
+    const queuedItems = await this.queueConsultationItems(tentacleId, payload, session.sessionId)
+    const approvedItemIds = queuedItems.map((item) => item.itemId)
+    const questions = payload.mode === "action_confirm" && !payload.action?.content
+      ? ["Please provide the action content before execution."]
+      : undefined
+
+    let decision: ConsultationReplyPayload["decision"] = "discard"
+    let status: ConsultationReplyPayload["status"] = "closed"
+    let nextAction: ConsultationReplyPayload["next_action"] = "none"
+
+    if (questions?.length) {
+      decision = "question"
+      status = "waiting_tentacle"
+      nextAction = "await_tentacle"
+    } else if (payload.mode === "action_confirm") {
+      decision = queuedItems.length > 0 ? "send" : "defer"
+      status = "waiting_user"
+      nextAction = "await_user"
+    } else if (queuedItems.length > 0) {
+      decision = "send"
+      status = "resolved"
+    }
+
+    await this.consultationStore.update(session.sessionId, {
+      status: mapReplyStatusToStore(status),
+      recentPushItemIds: queuedItems.map((item) => item.itemId),
+      lastTentacleReplyAt: new Date().toISOString(),
+    })
+
+    const logEvent = payload.mode === "action_confirm"
+      ? "consultation_action_confirm"
+      : "consultation_batch_received"
+    brainLogger.info(logEvent, {
+      tentacle_id: tentacleId,
+      request_id: payload.request_id,
+      session_id: session.sessionId,
+      mode: payload.mode,
+      queued_push_count: queuedItems.length,
+    })
+
+    if (queuedItems.some((item) => item.priority === "urgent" || item.timelinessHint === "immediate")) {
+      await this.deliverPushNow(queuedItems, session.sessionId)
+    }
+
+    return {
+      session_id: session.sessionId,
+      requestId: payload.request_id,
+      status,
+      decision,
+      approvedItemIds,
+      queuedPushCount: queuedItems.length,
+      notes: queuedItems.length > 0
+        ? `Queued ${queuedItems.length} push item(s) for user delivery`
+        : "No items met push threshold; kept as internal reference",
+      questions,
+      next_action: nextAction,
+    }
+  }
+
+  private async queueConsultationItems(
+    tentacleId: string,
+    payload: ConsultationRequestPayload,
+    sessionId: string,
+  ): Promise<ApprovedPushItem[]> {
+    const queued: ApprovedPushItem[] = []
+
+    if (payload.mode === "action_confirm" && payload.action) {
+      const priority = urgencyFromText(`${payload.summary}\n${payload.action.description}`)
+      const item: ApprovedPushItem = {
+        itemId: `${payload.request_id}:${payload.action.type}`,
+        tentacleId,
+        content: `${payload.summary}\n${payload.action.description}${payload.action.content ? `\n\n${payload.action.content}` : ""}`,
+        originalItems: [],
+        priority,
+        timelinessHint: "immediate",
+        needsUserAction: true,
+        approvedAt: new Date().toISOString(),
+        status: "pending",
+      }
+      await this.outboundQueue.addApprovedItem(item)
+      queued.push(item)
+      return queued
+    }
+
+    for (const item of payload.items ?? []) {
+      if (item.tentacleJudgment === "uncertain") continue
+      const priority = item.tentacleJudgment === "important"
+        ? urgencyFromText(`${item.content}\n${item.reason}`)
+        : "normal"
+      const pushItem: ApprovedPushItem = {
+        itemId: `${payload.request_id}:${item.id}`,
+        tentacleId,
+        content: item.content,
+        originalItems: [item.id],
+        priority,
+        timelinessHint: timelinessFromPriority(priority),
+        needsUserAction: false,
+        approvedAt: new Date().toISOString(),
+        status: "pending",
+      }
+      await this.outboundQueue.addApprovedItem(pushItem)
+      queued.push(pushItem)
+    }
+
+    if (queued.length > 0) {
+      await this.consultationStore.update(sessionId, {
+        recentPushItemIds: queued.map((item) => item.itemId),
+      })
+    }
+
+    return queued
+  }
+
+  private rememberDeliveredPush(channel: string, senderId: string, items: ApprovedPushItem[], messageId?: string): void {
+    if (!channel || !senderId || items.length === 0) return
+    const key = `${channel}:${senderId}`
+    this.recentPushContext.set(key, {
+      messageId: messageId ?? `push:${Date.now()}`,
+      itemIds: items.map((item) => item.itemId),
+      tentacleIds: Array.from(new Set(items.map((item) => item.tentacleId))),
+      deliveredAt: new Date().toISOString(),
+    })
+  }
+
+  private async recordFeedbackForRecentPush(
+    channel: string,
+    senderId: string,
+    reaction: "positive" | "negative",
+  ): Promise<void> {
+    const key = `${channel}:${senderId}`
+    const recent = this.recentPushContext.get(key)
+    if (!recent) return
+
+    const ageMs = Date.now() - new Date(recent.deliveredAt).getTime()
+    const maxAgeMs = (this.config.push.feedback?.ignoreWindowHours ?? 24) * 60 * 60 * 1000
+    if (ageMs > maxAgeMs) {
+      this.recentPushContext.delete(key)
+      return
+    }
+
+    await this.feedbackTracker.recordFeedback({
+      messageId: recent.messageId,
+      sourceTentacles: recent.tentacleIds,
+      reaction,
+      timestamp: new Date().toISOString(),
+    })
+    this.recentPushContext.delete(key)
+  }
+
+  private async processConsultationUserReply(input: BrainInput): Promise<void> {
+    const key = `${input.channel}:${input.senderId}`
+    const recent = this.recentPushContext.get(key)
+    if (!recent) return
+
+    const sessionId = this.pushMessageToConsultationSession.get(recent.messageId)
+    if (!sessionId) return
+
+    const session = await this.consultationStore.get(sessionId)
+    if (!session || session.status !== "waiting_user") return
+
+    const lowered = input.text.toLowerCase()
+    const approved = /(可以|同意|发布|发吧|approve|approved|ok|好的)/.test(lowered)
+    const rejected = /(不要|拒绝|rejected|reject|不发布|取消)/.test(lowered)
+    const decision = approved ? "approved" : rejected ? "rejected" : "revise"
+
+    await this.consultationStore.update(sessionId, {
+      status: "waiting_tentacle",
+      lastUserFeedback: input.text,
+      lastUserFeedbackAt: new Date().toISOString(),
+    })
+
+    await this.tentacleManager.forwardConsultationDirective(session.tentacleId, {
+      session_id: sessionId,
+      decision,
+      feedback: input.text,
+      action: session.actionType ? {
+        type: session.actionType,
+        approved,
+        content: session.actionContent,
+      } : undefined,
+    })
+  }
+
+  private async upsertConsultationSession(
+    tentacleId: string,
+    payload: ConsultationRequestPayload,
+  ): Promise<ConsultationSessionRecord> {
+    const existing = payload.session_id
+      ? await this.consultationStore.get(payload.session_id)
+      : null
+    if (existing) {
+      const requestIds = Array.from(new Set([...existing.requestIds, payload.request_id]))
+      return (await this.consultationStore.update(existing.sessionId, {
+        requestIds,
+        turn: payload.turn ?? existing.turn + 1,
+        updatedAt: new Date().toISOString(),
+        actionType: payload.action?.type ?? existing.actionType,
+        actionDescription: payload.action?.description ?? existing.actionDescription,
+        actionContent: payload.action?.content ?? existing.actionContent,
+        status: payload.mode === "action_confirm" ? "waiting_user" : existing.status,
+      })) ?? existing
+    }
+
+    const sessionId = payload.session_id ?? crypto.randomUUID()
+    return this.consultationStore.upsert({
+      sessionId,
+      tentacleId,
+      mode: payload.mode,
+      status: payload.mode === "action_confirm" ? "waiting_user" : "open",
+      requestIds: [payload.request_id],
+      turn: payload.turn ?? 1,
+      actionType: payload.action?.type,
+      actionDescription: payload.action?.description,
+      actionContent: payload.action?.content,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+  }
+
+  private async deliverPushNow(items: ApprovedPushItem[], sessionId?: string): Promise<void> {
+    if (!this.deliverToUser || items.length === 0) return
+    const text = items.length === 1 ? items[0].content : items.map((item, index) => `${index + 1}. ${item.content}`).join("\n")
+    const messageId = `push:${Date.now()}`
+    await this.deliverToUser(
+      {
+        channel: this.lastActiveChannel,
+        senderId: this.lastActiveSenderId,
+      },
+      {
+        text,
+        timing: "immediate",
+        priority: items.some((item) => item.priority === "urgent") ? "urgent" : "normal",
+        messageId,
+      },
+    )
+    await this.outboundQueue.markSentBatch(items.map((item) => item.itemId))
+    this.rememberDeliveredPush(this.lastActiveChannel, this.lastActiveSenderId, items, messageId)
+    const recent = this.recentPushContext.get(`${this.lastActiveChannel}:${this.lastActiveSenderId}`)
+    if (recent && sessionId) {
+      this.pushMessageToConsultationSession.set(recent.messageId, sessionId)
+      await this.consultationStore.update(sessionId, {
+        recentPushMessageId: recent.messageId,
+      })
+    }
   }
 
   private async loadSkillsSummary(): Promise<string | undefined> {
@@ -481,4 +1178,69 @@ export class Brain {
       `${skill.name} — ${skill.description || "No description"}${skill.spawnable ? " [spawnable]" : ""}`
     ).join("\n")
   }
+
+  private async buildSystemPrompt(options: {
+    channel: string
+    isDm: boolean
+    model: string
+    mode: "full" | "minimal"
+    thinkingLevel?: ThinkingLevel
+    reasoningEnabled?: boolean
+  }): Promise<string> {
+    const newWs = await isNewWorkspace(this.piCtx.workspaceDir)
+    const promptOptions: SystemPromptOptions = {
+      mode: options.mode,
+      channel: options.channel,
+      isDm: options.isDm,
+      isNewWorkspace: newWs,
+      model: options.model,
+      thinkingLevel: options.thinkingLevel ?? this.currentThinkingLevel,
+      hostname: os.hostname(),
+      nodeVersion: process.version,
+      osPlatform: process.platform,
+      osArch: process.arch,
+      tentacleSummary: this.listTentacles().length > 0
+        ? this.listTentacles().map((item) => `${item.tentacleId} (${item.status})`).join("\n")
+        : undefined,
+      skillsSummary: await this.loadSkillsSummary(),
+      heartbeatSummary: `Heartbeat runs every ${this.config.heartbeat.every} in the main session.\nRead HEARTBEAT.md and check all items. Reply HEARTBEAT_OK if nothing needs attention.\nCron jobs handle precise schedules — use cron_add tool to create scheduled tasks.\nDaily review runs as cron job "daily-review" at 0 22 * * *.`,
+    }
+    let prompt = await assembleSystemPrompt(this.piCtx.workspaceDir, promptOptions, this.toolRegistry)
+    if (options.reasoningEnabled ?? this.reasoningEnabled) {
+      prompt += "\n\n# Reasoning Output\nProvide a concise explanation of your reasoning in the final answer."
+    }
+    return prompt
+  }
+}
+
+function normalizeThinkingLevel(level: string): ThinkingLevel {
+  if (level === "low" || level === "medium" || level === "high" || level === "xhigh" || level === "off") {
+    return level
+  }
+  return "off"
+}
+
+function urgencyFromText(text: string): ApprovedPushItem["priority"] {
+  const lower = text.toLowerCase()
+  if (/(urgent|critical|immediate|high priority|紧急|严重|立刻)/.test(lower)) return "urgent"
+  if (/(important|action|confirm|review|审阅|确认)/.test(lower)) return "high"
+  if (/(reference|summary|digest|参考)/.test(lower)) return "low"
+  return "normal"
+}
+
+function timelinessFromPriority(priority: ApprovedPushItem["priority"]): ApprovedPushItem["timelinessHint"] {
+  if (priority === "urgent") return "immediate"
+  if (priority === "high") return "today"
+  if (priority === "normal") return "this_week"
+  return "anytime"
+}
+
+function mapReplyStatusToStore(
+  status: ConsultationReplyPayload["status"],
+): ConsultationSessionRecord["status"] {
+  if (status === "active") return "open"
+  if (status === "waiting_user") return "waiting_user"
+  if (status === "waiting_tentacle") return "waiting_tentacle"
+  if (status === "resolved") return "resolved"
+  return "closed"
 }

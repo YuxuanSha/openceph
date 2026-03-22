@@ -26,6 +26,7 @@ export class FeishuChannelPlugin implements ChannelPlugin {
   readonly defaultDmPolicy: DmPolicy = "pairing"
 
   private client: any = null
+  private directClient: any = null
   private wsClient: any = null
   private config: ChannelConfig | null = null
   private messageHandler: ((msg: InboundMessage) => Promise<void>) | null = null
@@ -51,49 +52,44 @@ export class FeishuChannelPlugin implements ChannelPlugin {
     const logger = this.createSdkLogger()
     this.sdkLogger = logger
 
-    // Create a custom httpInstance that mirrors the SDK's defaultHttpInstance
-    // interceptors. The SDK's internal token management destructures the axios
-    // response directly (e.g. `const { tenant_access_token } = await post(...)`)
-    // which requires the response interceptor to unwrap `resp.data`.
-    // Without this, the TokenManager receives the full AxiosResponse object and
-    // destructuring silently yields `undefined`, causing "Missing access token"
-    // errors (code 99991661) on every API call.
-    const httpInstanceConfig: any = {}
-    if (proxyMode === "direct") {
-      // When proxyMode is "direct", we explicitly disable the proxy to avoid
-      // going through HTTP_PROXY env var. This uses direct HTTPS connection.
-      httpInstanceConfig.proxy = false
+    const createHttpInstance = (mode: "direct" | "inherit") => {
+      const httpInstanceConfig: any = {}
+      if (mode === "direct") {
+        httpInstanceConfig.proxy = false
+      }
+      const httpInstance = axios.default.create(httpInstanceConfig)
+      httpInstance.interceptors.request.use(
+        (req: any) => {
+          if (req.headers) {
+            req.headers["User-Agent"] = "oapi-node-sdk/1.0.0"
+          }
+          return req
+        },
+        undefined,
+        { synchronous: true },
+      )
+      httpInstance.interceptors.response.use(
+        (resp: any) => {
+          if (resp.config?.["$return_headers"]) {
+            return { data: resp.data, headers: resp.headers }
+          }
+          return resp.data
+        },
+      )
+      return httpInstance
     }
-    // For "inherit" mode (or when proxyMode is not "direct"), axios will use
-    // HTTP_PROXY/HTTPS_PROXY environment variables automatically.
-    const httpInstance = axios.default.create(httpInstanceConfig)
-    httpInstance.interceptors.request.use(
-      (req: any) => {
-        if (req.headers) {
-          req.headers["User-Agent"] = "oapi-node-sdk/1.0.0"
-        }
-        return req
-      },
-      undefined,
-      { synchronous: true },
-    )
-    httpInstance.interceptors.response.use(
-      (resp: any) => {
-        if (resp.config?.["$return_headers"]) {
-          return { data: resp.data, headers: resp.headers }
-        }
-        return resp.data
-      },
-    )
 
-    this.client = new lark.Client({
+    const createClient = (mode: "direct" | "inherit") => new lark.Client({
       appId,
       appSecret,
       domain,
-      httpInstance,
+      httpInstance: createHttpInstance(mode),
       logger,
       loggerLevel: lark.LoggerLevel.info,
     })
+
+    this.client = createClient(proxyMode === "direct" ? "direct" : "inherit")
+    this.directClient = proxyMode === "direct" ? this.client : createClient("direct")
 
     // Pass a proxy agent to WSClient so the WS connection uses the system proxy.
     // The ws package doesn't auto-read HTTP_PROXY env, so we must inject it manually.
@@ -653,12 +649,24 @@ export class FeishuChannelPlugin implements ChannelPlugin {
     msgType: "text" | "interactive"
     content: string
   }): Promise<any> {
+    return this.sendReplyOrDirectWithClient(this.client, params, true)
+  }
+
+  private async sendReplyOrDirectWithClient(
+    client: any,
+    params: {
+      target: MessageTarget
+      msgType: "text" | "interactive"
+      content: string
+    },
+    allowDirectFallback: boolean,
+  ): Promise<any> {
     const resolvedTarget = this.resolveSendTarget(params.target)
     const replyToId = params.target.replyToId?.trim()
 
     if (replyToId) {
       try {
-        const response = await this.client.im.message.reply({
+        const response = await client.im.message.reply({
           path: { message_id: replyToId },
           data: {
             content: params.content,
@@ -676,6 +684,14 @@ export class FeishuChannelPlugin implements ChannelPlugin {
           msg: response?.msg,
         })
       } catch (err: any) {
+        if (allowDirectFallback && this.directClient && client !== this.directClient && isFeishuTransportFallbackError(err)) {
+          gatewayLogger.warn("feishu_proxy_reply_fallback", {
+            reply_to_id: replyToId,
+            error: err.message,
+          })
+          return this.sendDirectWithClient(this.directClient, resolvedTarget, params)
+        }
+
         if (!isWithdrawnReplyError(err)) {
           throw err
         }
@@ -687,14 +703,39 @@ export class FeishuChannelPlugin implements ChannelPlugin {
       }
     }
 
-    return await this.client.im.message.create({
-      data: {
-        receive_id: resolvedTarget.receiveId,
-        msg_type: params.msgType,
-        content: params.content,
-      },
-      params: { receive_id_type: resolvedTarget.receiveIdType },
-    })
+    return await this.sendDirectWithClient(client, resolvedTarget, params, allowDirectFallback)
+  }
+
+  private async sendDirectWithClient(
+    client: any,
+    resolvedTarget: { receiveId: string; receiveIdType: "chat_id" | "open_id" },
+    params: {
+      target: MessageTarget
+      msgType: "text" | "interactive"
+      content: string
+    },
+    allowDirectFallback = false,
+  ): Promise<any> {
+    try {
+      return await client.im.message.create({
+        data: {
+          receive_id: resolvedTarget.receiveId,
+          msg_type: params.msgType,
+          content: params.content,
+        },
+        params: { receive_id_type: resolvedTarget.receiveIdType },
+      })
+    } catch (err: any) {
+      if (allowDirectFallback && this.directClient && client !== this.directClient && isFeishuTransportFallbackError(err)) {
+        gatewayLogger.warn("feishu_proxy_direct_fallback", {
+          receive_id: resolvedTarget.receiveId,
+          receive_id_type: resolvedTarget.receiveIdType,
+          error: err.message,
+        })
+        return this.sendDirectWithClient(this.directClient, resolvedTarget, params, false)
+      }
+      throw err
+    }
   }
 }
 
@@ -712,6 +753,20 @@ function chunkText(text: string, limit: number): string[] {
   }
   if (remaining) chunks.push(remaining)
   return chunks
+}
+
+function isFeishuTransportFallbackError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) {
+    return false
+  }
+
+  const response = (err as { response?: { status?: number } }).response
+  if (response?.status === 502 || response?.status === 503 || response?.status === 504) {
+    return true
+  }
+
+  const code = (err as { code?: string }).code
+  return code === "ECONNRESET" || code === "ECONNREFUSED" || code === "ETIMEDOUT"
 }
 
 function isFeishuBackoffError(err: unknown): boolean {

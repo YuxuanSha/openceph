@@ -50,6 +50,12 @@ export declare const OpenCephConfigSchema: z.ZodObject<{
                 maxTokens: z.ZodOptional<z.ZodNumber>;
             }, z.core.$strip>>>;
         }, z.core.$strip>>>;
+        named: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodObject<{
+            model: z.ZodObject<{
+                primary: z.ZodString;
+                fallbacks: z.ZodDefault<z.ZodArray<z.ZodString>>;
+            }, z.core.$strip>;
+        }, z.core.$strip>>>;
     }, z.core.$strip>>>;
     auth: z.ZodDefault<z.ZodOptional<z.ZodObject<{
         profiles: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodObject<{
@@ -154,11 +160,46 @@ export declare const OpenCephConfigSchema: z.ZodObject<{
         maxActive: z.ZodDefault<z.ZodNumber>;
         ipcSocketPath: z.ZodDefault<z.ZodString>;
         codeGenMaxRetries: z.ZodDefault<z.ZodNumber>;
+        codeGenTimeoutMs: z.ZodDefault<z.ZodNumber>;
+        codeGenPollIntervalMs: z.ZodDefault<z.ZodNumber>;
+        codeGenIdleTimeoutMs: z.ZodDefault<z.ZodNumber>;
         crashRestartMaxAttempts: z.ZodDefault<z.ZodNumber>;
         confidenceThresholds: z.ZodDefault<z.ZodObject<{
             directReport: z.ZodDefault<z.ZodNumber>;
             consultation: z.ZodDefault<z.ZodNumber>;
             discard: z.ZodDefault<z.ZodNumber>;
+        }, z.core.$strip>>;
+        review: z.ZodOptional<z.ZodDefault<z.ZodObject<{
+            weakenThreshold: z.ZodDefault<z.ZodNumber>;
+            killThreshold: z.ZodDefault<z.ZodNumber>;
+            killAfterDaysNoReport: z.ZodDefault<z.ZodNumber>;
+            mergeSimilarityThreshold: z.ZodDefault<z.ZodNumber>;
+        }, z.core.$strip>>>;
+    }, z.core.$strip>>>;
+    heartbeat: z.ZodDefault<z.ZodOptional<z.ZodObject<{
+        every: z.ZodDefault<z.ZodString>;
+        target: z.ZodDefault<z.ZodString>;
+        checkAfterTurns: z.ZodDefault<z.ZodNumber>;
+        activeHours: z.ZodOptional<z.ZodObject<{
+            start: z.ZodString;
+            end: z.ZodString;
+        }, z.core.$strip>>;
+        model: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>>;
+    cron: z.ZodDefault<z.ZodOptional<z.ZodObject<{
+        enabled: z.ZodDefault<z.ZodBoolean>;
+        store: z.ZodDefault<z.ZodString>;
+        timezone: z.ZodDefault<z.ZodString>;
+        maxConcurrentRuns: z.ZodDefault<z.ZodNumber>;
+        sessionRetention: z.ZodDefault<z.ZodString>;
+        retry: z.ZodDefault<z.ZodObject<{
+            maxAttempts: z.ZodDefault<z.ZodNumber>;
+            backoffMs: z.ZodDefault<z.ZodArray<z.ZodNumber>>;
+        }, z.core.$strip>>;
+        isolatedSessionRetention: z.ZodDefault<z.ZodString>;
+        runLog: z.ZodDefault<z.ZodObject<{
+            maxBytes: z.ZodDefault<z.ZodNumber>;
+            keepLines: z.ZodDefault<z.ZodNumber>;
         }, z.core.$strip>>;
     }, z.core.$strip>>>;
     push: z.ZodDefault<z.ZodOptional<z.ZodObject<{
@@ -170,6 +211,18 @@ export declare const OpenCephConfigSchema: z.ZodObject<{
         preferredWindowStart: z.ZodDefault<z.ZodString>;
         preferredWindowEnd: z.ZodDefault<z.ZodString>;
         maxDailyPushes: z.ZodDefault<z.ZodNumber>;
+        consolidate: z.ZodDefault<z.ZodBoolean>;
+        dedup: z.ZodDefault<z.ZodOptional<z.ZodObject<{
+            byUrl: z.ZodDefault<z.ZodBoolean>;
+            bySimilarity: z.ZodDefault<z.ZodBoolean>;
+            similarityThreshold: z.ZodDefault<z.ZodNumber>;
+        }, z.core.$strip>>>;
+        feedback: z.ZodDefault<z.ZodOptional<z.ZodObject<{
+            enabled: z.ZodDefault<z.ZodBoolean>;
+            ignoreWindowHours: z.ZodDefault<z.ZodNumber>;
+        }, z.core.$strip>>>;
+        fallbackDigestTime: z.ZodDefault<z.ZodString>;
+        fallbackDigestTz: z.ZodDefault<z.ZodString>;
     }, z.core.$strip>>>;
     session: z.ZodDefault<z.ZodOptional<z.ZodObject<{
         dmScope: z.ZodDefault<z.ZodEnum<{
@@ -213,6 +266,10 @@ export declare const OpenCephConfigSchema: z.ZodObject<{
         config: z.ZodDefault<z.ZodBoolean>;
         debug: z.ZodDefault<z.ZodBoolean>;
         bash: z.ZodDefault<z.ZodBoolean>;
+    }, z.core.$strip>>>;
+    plugins: z.ZodDefault<z.ZodOptional<z.ZodObject<{
+        autoDiscover: z.ZodDefault<z.ZodBoolean>;
+        allowedPackageScopes: z.ZodDefault<z.ZodArray<z.ZodString>>;
     }, z.core.$strip>>>;
     tools: z.ZodDefault<z.ZodOptional<z.ZodObject<{
         loopDetection: z.ZodDefault<z.ZodOptional<z.ZodObject<{

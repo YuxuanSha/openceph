@@ -15,6 +15,7 @@ export interface SystemPromptOptions {
   tentacleSummary?: string
   pendingReports?: number
   skillsSummary?: string
+  heartbeatSummary?: string
 }
 
 export async function assembleSystemPrompt(
@@ -70,8 +71,7 @@ export async function assembleSystemPrompt(
   )
 
   if (options.mode === "full") {
-    // Section 9: Heartbeats (M2 placeholder)
-    sections.push("# Heartbeats\nHeartbeat scheduler not active (will be enabled in a future update).")
+    sections.push(`# Heartbeats\n${options.heartbeatSummary ?? "Heartbeat runs every 24h in the main session.\nRead HEARTBEAT.md and check all items. Reply HEARTBEAT_OK if nothing needs attention.\nCron jobs handle precise schedules."}`)
   }
 
   // Section 10: Runtime

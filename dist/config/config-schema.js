@@ -19,6 +19,12 @@ const ProviderSchema = z.object({
     api: z.string().optional(),
     models: z.array(ProviderModelSchema).optional(),
 });
+const NamedModelConfigSchema = z.object({
+    model: z.object({
+        primary: z.string(),
+        fallbacks: z.array(z.string()).default([]),
+    }),
+});
 const AuthProfileSchema = z.object({
     mode: z.enum(["api_key", "oauth"]),
     apiKey: z.string().optional(),
@@ -93,10 +99,24 @@ const SkillsConfigSchema = z.object({
         "~/.openceph/skills",
     ]),
 });
+const TentacleReviewSchema = z.object({
+    weakenThreshold: z.number().default(0.2),
+    killThreshold: z.number().default(0.1),
+    killAfterDaysNoReport: z.number().default(14),
+    mergeSimilarityThreshold: z.number().default(0.6),
+}).default({
+    weakenThreshold: 0.2,
+    killThreshold: 0.1,
+    killAfterDaysNoReport: 14,
+    mergeSimilarityThreshold: 0.6,
+});
 const TentacleConfigSchema = z.object({
     maxActive: z.number().default(20),
     ipcSocketPath: z.string().default("~/.openceph/openceph.sock"),
     codeGenMaxRetries: z.number().default(3),
+    codeGenTimeoutMs: z.number().default(120_000),
+    codeGenPollIntervalMs: z.number().default(20_000),
+    codeGenIdleTimeoutMs: z.number().default(60_000),
     crashRestartMaxAttempts: z.number().default(3),
     confidenceThresholds: z.object({
         directReport: z.number().default(0.8),
@@ -106,6 +126,39 @@ const TentacleConfigSchema = z.object({
         directReport: 0.8,
         consultation: 0.4,
         discard: 0.0,
+    }),
+    review: TentacleReviewSchema.optional(),
+});
+const HeartbeatConfigSchema = z.object({
+    every: z.string().default("24h"),
+    target: z.string().default("none"),
+    checkAfterTurns: z.number().default(100),
+    activeHours: z.object({
+        start: z.string(),
+        end: z.string(),
+    }).optional(),
+    model: z.string().optional(),
+});
+const CronConfigSchema = z.object({
+    enabled: z.boolean().default(true),
+    store: z.string().default("~/.openceph/cron/jobs.json"),
+    timezone: z.string().default("UTC"),
+    maxConcurrentRuns: z.number().default(1),
+    sessionRetention: z.string().default("24h"),
+    retry: z.object({
+        maxAttempts: z.number().default(3),
+        backoffMs: z.array(z.number()).default([60_000, 120_000, 300_000]),
+    }).default({
+        maxAttempts: 3,
+        backoffMs: [60_000, 120_000, 300_000],
+    }),
+    isolatedSessionRetention: z.string().default("7d"),
+    runLog: z.object({
+        maxBytes: z.number().default(5 * 1024 * 1024),
+        keepLines: z.number().default(500),
+    }).default({
+        maxBytes: 5 * 1024 * 1024,
+        keepLines: 500,
     }),
 });
 const LoopDetectionSchema = z.object({
@@ -150,7 +203,8 @@ export const OpenCephConfigSchema = z.object({
     }),
     models: z.object({
         providers: z.record(z.string(), ProviderSchema).default({}),
-    }).optional().default({ providers: {} }),
+        named: z.record(z.string(), NamedModelConfigSchema).default({}),
+    }).optional().default({ providers: {}, named: {} }),
     auth: z.object({
         profiles: z.record(z.string(), AuthProfileSchema).default({}),
         order: z.record(z.string(), z.array(z.string())).default({}),
@@ -196,23 +250,70 @@ export const OpenCephConfigSchema = z.object({
         maxActive: 20,
         ipcSocketPath: "~/.openceph/openceph.sock",
         codeGenMaxRetries: 3,
+        codeGenTimeoutMs: 120_000,
+        codeGenPollIntervalMs: 20_000,
+        codeGenIdleTimeoutMs: 60_000,
         crashRestartMaxAttempts: 3,
         confidenceThresholds: {
             directReport: 0.8,
             consultation: 0.4,
             discard: 0.0,
         },
+        review: {
+            weakenThreshold: 0.2,
+            killThreshold: 0.1,
+            killAfterDaysNoReport: 14,
+            mergeSimilarityThreshold: 0.6,
+        },
+    }),
+    heartbeat: HeartbeatConfigSchema.optional().default({
+        every: "24h",
+        target: "none",
+        checkAfterTurns: 100,
+    }),
+    cron: CronConfigSchema.optional().default({
+        enabled: true,
+        store: "~/.openceph/cron/jobs.json",
+        timezone: "UTC",
+        maxConcurrentRuns: 1,
+        sessionRetention: "24h",
+        retry: {
+            maxAttempts: 3,
+            backoffMs: [60_000, 120_000, 300_000],
+        },
+        isolatedSessionRetention: "7d",
+        runLog: {
+            maxBytes: 5 * 1024 * 1024,
+            keepLines: 500,
+        },
     }),
     push: z.object({
         defaultTiming: z.enum(["immediate", "best_time", "morning_digest"]).default("best_time"),
         preferredWindowStart: z.string().default("09:00"),
         preferredWindowEnd: z.string().default("10:00"),
-        maxDailyPushes: z.number().default(3),
+        maxDailyPushes: z.number().default(5),
+        consolidate: z.boolean().default(true),
+        dedup: z.object({
+            byUrl: z.boolean().default(true),
+            bySimilarity: z.boolean().default(true),
+            similarityThreshold: z.number().default(0.8),
+        }).optional().default({ byUrl: true, bySimilarity: true, similarityThreshold: 0.8 }),
+        feedback: z.object({
+            enabled: z.boolean().default(true),
+            ignoreWindowHours: z.number().default(24),
+        }).optional().default({ enabled: true, ignoreWindowHours: 24 }),
+        fallbackDigestTime: z.string().default("09:00"),
+        fallbackDigestTz: z.string().default("UTC"),
     }).optional().default({
         defaultTiming: "best_time",
         preferredWindowStart: "09:00",
         preferredWindowEnd: "10:00",
-        maxDailyPushes: 3,
+        maxDailyPushes: 5,
+        consolidate: true,
+        dedup: { byUrl: true, bySimilarity: true, similarityThreshold: 0.8 },
+        feedback: { enabled: true, ignoreWindowHours: 24 },
+        fallbackDigestTime: "09:00",
+        fallbackDigestTz: "UTC",
     }),
     session: z.object({
         dmScope: z.enum(["main", "per-channel-peer"]).default("main"),
@@ -259,6 +360,13 @@ export const OpenCephConfigSchema = z.object({
         debug: z.boolean().default(false),
         bash: z.boolean().default(false),
     }).optional().default({ config: false, debug: false, bash: false }),
+    plugins: z.object({
+        autoDiscover: z.boolean().default(true),
+        allowedPackageScopes: z.array(z.string()).default(["@openceph", "@openceph-skills"]),
+    }).optional().default({
+        autoDiscover: true,
+        allowedPackageScopes: ["@openceph", "@openceph-skills"],
+    }),
     tools: z.object({
         loopDetection: LoopDetectionSchema.optional().default({
             enabled: true,

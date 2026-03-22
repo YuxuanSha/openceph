@@ -1,4 +1,5 @@
 import { type AgentSession } from "@mariozechner/pi-coding-agent";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { PiContext } from "./pi-context.js";
 import type { OpenCephConfig } from "../config/config-schema.js";
 export interface BrainSessionOptions {
@@ -6,6 +7,7 @@ export interface BrainSessionOptions {
     modelId?: string;
     systemPrompt?: string;
     customTools?: import("@mariozechner/pi-coding-agent").ToolDefinition<any, any>[];
+    thinkingLevel?: ThinkingLevel;
 }
 export interface BrainSession {
     session: AgentSession;

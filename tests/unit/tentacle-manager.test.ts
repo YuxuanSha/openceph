@@ -75,6 +75,8 @@ describe("TentacleManager", () => {
     expect(manager.getStatus("t1")?.status).toBe("paused")
     expect(await manager.resume("t1")).toBe(true)
     expect(manager.getStatus("t1")?.status).toBe("running")
+    expect(await manager.weaken("t1", "test")).toBe(true)
+    expect(manager.getStatus("t1")?.status).toBe("weakened")
     expect(await manager.kill("t1", "test")).toBe(true)
     expect(manager.getStatus("t1")?.status).toBe("killed")
     await ipc.stop()

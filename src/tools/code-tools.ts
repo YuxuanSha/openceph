@@ -4,8 +4,7 @@ import type { ToolRegistryEntry } from "./index.js"
 import type { OpenCephConfig } from "../config/config-schema.js"
 import type { PiContext } from "../pi/pi-context.js"
 import { brainLogger } from "../logger/index.js"
-import { CodeAgent, type CodeAgentRequirement } from "../code-agent/code-agent.js"
-import { TentacleValidator } from "../code-agent/validator.js"
+import { CodeAgent, CodeAgentAlreadyRunningError, CodeAgentProcessError, CodeAgentTimeoutError, type CodeAgentRequirement } from "../code-agent/code-agent.js"
 import { TentacleDeployer } from "../code-agent/deployer.js"
 import { TentacleManager } from "../tentacle/manager.js"
 
@@ -19,73 +18,25 @@ export function createCodeTools(opts: {
   tentacleManager: TentacleManager
 }): ToolRegistryEntry[] {
   const agent = new CodeAgent(opts.piCtx, opts.config)
-  const validator = new TentacleValidator()
   const deployer = new TentacleDeployer(opts.tentacleManager.getTentacleBaseDir())
 
   const invokeCodeAgent: ToolDefinition = {
     name: "invoke_code_agent",
     label: "Invoke Code Agent",
-    description: "生成、校验并部署新的触手代码",
+    description: "生成并落盘新的触手代码（完整 Agent 系统），完成后立即返回 Claude Code 结果",
     parameters: Type.Object({
       tentacle_id: Type.String(),
-      requirement: Type.String({ description: "触手需求完整描述" }),
-      preferred_runtime: Type.Optional(Type.Union([
-        Type.Literal("python"),
-        Type.Literal("typescript"),
-        Type.Literal("go"),
-        Type.Literal("shell"),
-      ])),
-      context: Type.Optional(Type.Object({
-        existing_examples: Type.Optional(Type.Array(Type.String())),
-        special_requirements: Type.Optional(Type.String()),
+      purpose: Type.String({ description: "触手使命" }),
+      workflow: Type.Optional(Type.String({ description: "工作流描述" })),
+      capabilities: Type.Optional(Type.Array(Type.String())),
+      report_strategy: Type.Optional(Type.String()),
+      infrastructure: Type.Optional(Type.Object({
+        needsHttpServer: Type.Optional(Type.Boolean()),
+        needsDatabase: Type.Optional(Type.Boolean()),
+        needsLlm: Type.Optional(Type.Boolean()),
+        needsFileStorage: Type.Optional(Type.Boolean()),
       })),
-    }),
-    async execute(_id, params: any) {
-      const requirement = parseRequirement(params)
-      const retries = Math.max(1, opts.config.tentacle.codeGenMaxRetries)
-      let lastError = "unknown error"
-      brainLogger.info("code_agent_start", { tentacle_id: params.tentacle_id, preferred_runtime: params.preferred_runtime ?? "auto" })
-
-      for (let attempt = 1; attempt <= retries; attempt++) {
-        const generated = await agent.generate(requirement)
-        const validation = await validator.validateAll(generated)
-        if (!validation.valid) {
-          lastError = validation.errors.join("; ")
-          continue
-        }
-
-        const directory = await deployer.deploy(params.tentacle_id, generated, {
-          purpose: requirement.purpose,
-          trigger: requirement.triggerCondition,
-          dataSources: requirement.dataSources,
-        })
-        await opts.tentacleManager.spawn(params.tentacle_id)
-        brainLogger.info("code_agent_success", { tentacle_id: params.tentacle_id, runtime: generated.runtime })
-        return ok(JSON.stringify({
-          success: true,
-          tentacle_id: params.tentacle_id,
-          runtime: generated.runtime,
-          entry_command: generated.entryCommand,
-          directory,
-          warnings: validation.warnings,
-        }, null, 2))
-      }
-
-      brainLogger.error("code_agent_failed", { tentacle_id: params.tentacle_id, error: lastError })
-      return ok(`Code generation failed: ${lastError}`)
-    },
-  }
-
-  const createTentacle: ToolDefinition = {
-    name: "create_tentacle",
-    label: "Create Tentacle",
-    description: "根据结构化需求生成新的触手",
-    parameters: Type.Object({
-      tentacle_id: Type.String(),
-      purpose: Type.String(),
-      trigger_condition: Type.String(),
-      data_sources: Type.Array(Type.String()),
-      output_format: Type.String(),
+      external_apis: Type.Optional(Type.Array(Type.String())),
       preferred_runtime: Type.Optional(Type.Union([
         Type.Literal("python"),
         Type.Literal("typescript"),
@@ -93,55 +44,79 @@ export function createCodeTools(opts: {
         Type.Literal("shell"),
         Type.Literal("auto"),
       ])),
-      ask_user_confirm: Type.Optional(Type.Boolean({ default: true })),
     }),
     async execute(_id, params: any) {
-      const requirement: CodeAgentRequirement = {
-        tentacleId: params.tentacle_id,
-        purpose: params.purpose,
-        triggerCondition: params.trigger_condition,
-        dataSources: params.data_sources,
-        outputFormat: params.output_format,
-        preferredRuntime: params.preferred_runtime ?? "auto",
-      }
+      try {
+        const requirement: CodeAgentRequirement = {
+          tentacleId: params.tentacle_id,
+          purpose: params.purpose,
+          workflow: params.workflow ?? params.purpose,
+          capabilities: params.capabilities ?? [],
+          reportStrategy: params.report_strategy ?? "Report findings in batch when 3+ items accumulated",
+          infrastructure: params.infrastructure,
+          externalApis: params.external_apis,
+          preferredRuntime: params.preferred_runtime ?? "auto",
+          userContext: "",
+        }
 
-      const generated = await agent.generate(requirement)
-      const validation = await validator.validateAll(generated)
-      if (!validation.valid) {
-        return ok(`Code generation failed validation: ${validation.errors.join("; ")}`)
+        let generated = await agent.generate(requirement)
+        brainLogger.info("code_agent_start", { tentacle_id: params.tentacle_id })
+        let directory: string | undefined
+        let deployError: string | undefined
+        try {
+          directory = await deployer.deploy(params.tentacle_id, generated, {
+            purpose: requirement.purpose,
+            workflow: requirement.workflow,
+            capabilities: requirement.capabilities,
+            reportStrategy: requirement.reportStrategy,
+          })
+        } catch (error: any) {
+          deployError = error.message
+        }
+
+        brainLogger.info("code_agent_success", { tentacle_id: params.tentacle_id, runtime: generated.runtime, directory })
+        return ok(JSON.stringify({
+          success: true,
+          tentacle_id: params.tentacle_id,
+          runtime: generated.runtime,
+          entry_command: generated.entryCommand,
+          setup_commands: generated.setupCommands,
+          dependencies: generated.dependencies,
+          directory,
+          deployed: Boolean(directory),
+          spawned: false,
+          description: generated.description,
+          claude_final_text: generated.diagnostics?.finalText ?? generated.description,
+          claude_session_id: generated.diagnostics?.claudeSessionId,
+          claude_model_id: generated.diagnostics?.modelId,
+          claude_result_subtype: generated.diagnostics?.resultSubtype,
+          code_agent_session_file: generated.diagnostics?.sessionFile,
+          code_agent_work_dir: generated.diagnostics?.workDir,
+          generated_files: generated.files.map((file) => ({
+            path: file.path,
+            location: directory ? `${directory}/${file.path}` : undefined,
+          })),
+          errors: deployError ? [`部署失败: ${deployError}`] : [],
+        }, null, 2))
+      } catch (error: any) {
+        if (
+          error instanceof CodeAgentTimeoutError
+          || error instanceof CodeAgentProcessError
+          || error instanceof CodeAgentAlreadyRunningError
+        ) {
+          return ok(JSON.stringify({
+            success: false,
+            tentacle_id: params.tentacle_id,
+            error: error.message,
+            code_agent_session_file: error.sessionFile,
+          }, null, 2))
+        }
+        return ok(`Code generation failed: ${error.message}`)
       }
-      const directory = await deployer.deploy(params.tentacle_id, generated, {
-        purpose: params.purpose,
-        trigger: params.trigger_condition,
-        dataSources: params.data_sources,
-      })
-      await opts.tentacleManager.spawn(params.tentacle_id)
-      return ok(JSON.stringify({
-        success: true,
-        tentacle_id: params.tentacle_id,
-        runtime: generated.runtime,
-        directory,
-      }, null, 2))
     },
   }
 
   return [
     { name: "invoke_code_agent", description: invokeCodeAgent.description, group: "code", tool: invokeCodeAgent },
-    { name: "create_tentacle", description: createTentacle.description, group: "code", tool: createTentacle },
   ]
-}
-
-function parseRequirement(params: any): CodeAgentRequirement {
-  return {
-    tentacleId: params.tentacle_id,
-    purpose: params.requirement,
-    triggerCondition: "manual",
-    dataSources: [],
-    outputFormat: "summary",
-    preferredRuntime: params.preferred_runtime ?? "auto",
-    context: params.context ? {
-      existingExamples: params.context.existing_examples,
-      specialRequirements: params.context.special_requirements,
-    } : undefined,
-  }
 }

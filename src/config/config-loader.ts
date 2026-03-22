@@ -101,5 +101,9 @@ function expandPaths(config: OpenCephConfig): OpenCephConfig {
       ...config.tentacle,
       ipcSocketPath: expand(config.tentacle.ipcSocketPath),
     },
+    cron: {
+      ...config.cron,
+      store: expand(config.cron.store),
+    },
   }
 }

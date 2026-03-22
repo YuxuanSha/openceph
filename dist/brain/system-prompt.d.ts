@@ -13,5 +13,6 @@ export interface SystemPromptOptions {
     tentacleSummary?: string;
     pendingReports?: number;
     skillsSummary?: string;
+    heartbeatSummary?: string;
 }
 export declare function assembleSystemPrompt(workspaceDir: string, options: SystemPromptOptions, toolRegistry?: ToolRegistry): Promise<string>;

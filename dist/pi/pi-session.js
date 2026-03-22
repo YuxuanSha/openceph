@@ -27,7 +27,7 @@ export async function createBrainSession(piCtx, config, options) {
         authStorage: piCtx.authStorage,
         modelRegistry: piCtx.modelRegistry,
         model,
-        thinkingLevel: "off",
+        thinkingLevel: options.thinkingLevel ?? "off",
         tools: [],
         customTools: options.customTools ?? [],
         sessionManager,

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import * as fs from "fs"
 import * as path from "path"
 import * as os from "os"
@@ -40,34 +40,68 @@ describe("SkillSpawner", () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  it("copies a spawnable skill and starts it", async () => {
+  it("runs Claude Code once and returns generated result immediately", async () => {
     const skillDir = path.join(dir, "skills", "demo")
     fs.mkdirSync(skillDir, { recursive: true })
     fs.writeFileSync(path.join(skillDir, "SKILL.md"), `---\nname: demo\ndescription: test skill\nversion: 1.0.0\nspawnable: true\nruntime: python\nentry: main.py\ndefault_trigger: manual\n---\n`)
-    fs.writeFileSync(path.join(skillDir, "main.py"), `
-import json, os, socket, time, uuid
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(os.environ["OPENCEPH_SOCKET_PATH"])
-sock.sendall((json.dumps({"type":"tentacle_register","sender":os.environ["OPENCEPH_TENTACLE_ID"],"receiver":"brain","payload":{"purpose":"demo","runtime":"python"},"timestamp":"x","message_id":str(uuid.uuid4())})+"\\n").encode("utf-8"))
-while True: time.sleep(1)
-`)
+    fs.writeFileSync(path.join(skillDir, "main.py"), "print('template')\n")
 
+    const config = {
+      tentacle: { ipcSocketPath: path.join(dir, "sock"), codeGenMaxRetries: 3, crashRestartMaxAttempts: 3 },
+      agents: { defaults: { workspace: path.join(dir, "workspace") } },
+    } as any
     const ipc = new IpcServer(path.join(dir, "sock"))
     await ipc.start()
     const manager = new TentacleManager(
-      { tentacle: { ipcSocketPath: path.join(dir, "sock"), crashRestartMaxAttempts: 3 } } as any,
+      config,
       ipc,
       new TentacleRegistry(path.join(dir, "workspace")),
       new PendingReportsQueue(path.join(dir, "pending.json")),
     )
     const loader = new SkillLoader([path.join(dir, "skills")])
-    const spawner = new SkillSpawner({ tentacle: { ipcSocketPath: path.join(dir, "sock") } } as any, loader, manager, { python3: true, node: true, go: false, bash: true })
+    const generate = vi.fn(async () => ({
+      runtime: "python",
+      files: [
+        { path: "main.py", content: "print('ok')\n" },
+        { path: "README.md", content: "# generated\n" },
+      ],
+      entryCommand: "python3 main.py",
+      setupCommands: [],
+      dependencies: undefined,
+      envVars: ["OPENCEPH_SOCKET_PATH"],
+      description: "generated tentacle",
+      diagnostics: {
+        sessionFile: path.join(dir, "claude-session.jsonl"),
+        workDir: path.join(dir, "claude-work"),
+        elapsedMs: 1234,
+        turnCount: 2,
+        toolCalls: [],
+        finalText: "Claude finished successfully",
+        claudeSessionId: "claude-session-1",
+        modelId: "claude-sonnet-4-5-20250929",
+        resultSubtype: "success",
+        persistentSession: true,
+      },
+    }))
+    const spawner = new SkillSpawner(config, loader, manager, { generate } as any)
 
-    const result = await spawner.spawn("demo", "t_demo")
+    const result = await spawner.spawn({
+      skillName: "demo",
+      tentacleId: "t_demo",
+      purpose: "demo skill test",
+      workflow: "test workflow",
+      userConfirmed: true,
+    })
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(result.success).toBe(true)
     expect(result.tentacleId).toBe("t_demo")
-    expect(await manager.waitForRegistration("t_demo", 3000)).toBe(true)
+    expect(result.spawned).toBe(false)
+    expect(result.deployed).toBe(true)
+    expect(result.claudeFinalText).toBe("Claude finished successfully")
+    expect(result.claudeSessionId).toBe("claude-session-1")
+    expect(result.files).toEqual(["main.py", "README.md"])
+    expect(result.generatedFiles?.map((file) => file.path)).toEqual(["main.py", "README.md"])
     expect(fs.existsSync(path.join(manager.getTentacleDir("t_demo"), "tentacle.json"))).toBe(true)
-    await manager.kill("t_demo", "done")
     await ipc.stop()
-  })
+  }, 20_000)
 })

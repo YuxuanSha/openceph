@@ -31,27 +31,12 @@ export class SkillLoader {
   async loadAll(): Promise<SkillEntry[]> {
     this.skills.clear()
 
-    const configuredPaths = [...this.skillPaths].reverse()
-    const bundledPaths = [
-      path.join(__dirname, "..", "templates", "skills"),
-      path.join(__dirname, "..", "..", "src", "templates", "skills"),
-    ]
-    const allPaths = [
-      ...bundledPaths,
-      ...configuredPaths,
-    ]
-
-    for (const basePath of allPaths) {
-      if (!existsSync(basePath)) continue
-      const entries = await fs.readdir(basePath, { withFileTypes: true })
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue
-        const skillPath = path.join(basePath, entry.name, "SKILL.md")
-        if (!existsSync(skillPath)) continue
-        const content = await fs.readFile(skillPath, "utf-8")
-        const skill = parseSkillContent(content, path.join(basePath, entry.name))
-        this.skills.set(skill.name, skill)
-      }
+    const configuredFound = await this.loadFromPaths(this.skillPaths)
+    if (!configuredFound) {
+      await this.loadFromPaths([
+        path.join(__dirname, "..", "templates", "skills"),
+        path.join(__dirname, "..", "..", "src", "templates", "skills"),
+      ])
     }
 
     return Array.from(this.skills.values()).sort((a, b) => a.name.localeCompare(b.name))
@@ -78,6 +63,24 @@ export class SkillLoader {
       ? (await fs.readdir(referencesDir)).sort()
       : []
     return { content, references }
+  }
+
+  private async loadFromPaths(paths: string[]): Promise<boolean> {
+    let foundAny = false
+    for (const basePath of [...paths].reverse()) {
+      if (!existsSync(basePath)) continue
+      const entries = await fs.readdir(basePath, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const skillPath = path.join(basePath, entry.name, "SKILL.md")
+        if (!existsSync(skillPath)) continue
+        const content = await fs.readFile(skillPath, "utf-8")
+        const skill = parseSkillContent(content, path.join(basePath, entry.name))
+        this.skills.set(skill.name, skill)
+        foundAny = true
+      }
+    }
+    return foundAny
   }
 }
 

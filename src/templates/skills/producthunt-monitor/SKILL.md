@@ -5,7 +5,7 @@ version: 1.0.0
 spawnable: true
 runtime: python
 entry: scripts/monitor.py
-default_trigger: every 6 hours
+default_trigger: 6h
 setup_commands:
   - python3 -m venv venv
 requires:

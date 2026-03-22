@@ -12,6 +12,12 @@ import { CredentialStore } from "./config/credential-store.js"
 import { createPiContext } from "./pi/pi-context.js"
 import { initLoggers } from "./logger/index.js"
 import { fileURLToPath } from "url"
+import { CronStore } from "./cron/cron-store.js"
+import { CronRunner } from "./cron/cron-runner.js"
+import { CronScheduler } from "./cron/cron-scheduler.js"
+import { parseDurationMs } from "./cron/time.js"
+import { SessionStoreManager } from "./session/session-store.js"
+import { readRuntimeStatus } from "./logger/runtime-status-store.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -25,6 +31,34 @@ program
   .name("openceph")
   .description("OpenCeph — AI Personal Operating System")
   .version("0.1.0")
+
+async function createCronServices() {
+  const config = loadConfig()
+  initLoggers(config)
+  const piCtx = await createPiContext(config)
+  const { Brain } = await import("./brain/brain.js")
+  const brain = new Brain({ config, piCtx })
+  await brain.initialize()
+  const store = new CronStore(config.cron.store)
+  const runner = new CronRunner(
+    piCtx,
+    config,
+    brain,
+    null,
+    store,
+    new SessionStoreManager("cron"),
+  )
+  const scheduler = new CronScheduler(config, store, runner)
+  await scheduler.start()
+  await brain.registerCronScheduler(scheduler)
+  return {
+    scheduler,
+    async shutdown() {
+      scheduler.stop()
+      await brain.shutdown()
+    },
+  }
+}
 
 // ─── openceph init ───────────────────────────────────────────────
 
@@ -153,21 +187,31 @@ program
       await brain.registerTools(mcpBridge.getTools())
 
       const { CommandHandler } = await import("./gateway/commands/command-handler.js")
-      const { newCommand, stopCommand } = await import("./gateway/commands/session.js")
+      const { newCommand, stopCommand, compactCommand } = await import("./gateway/commands/session.js")
       const { statusCommand, whoamiCommand } = await import("./gateway/commands/status.js")
       const { helpCommand } = await import("./gateway/commands/help.js")
-      const { modelCommand } = await import("./gateway/commands/model.js")
-      const { tentaclesCommand } = await import("./gateway/commands/tentacle.js")
+      const { modelCommand, thinkCommand, reasoningCommand } = await import("./gateway/commands/model.js")
+      const { tentaclesCommand, tentacleCommand } = await import("./gateway/commands/tentacle.js")
+      const { cronCommand } = await import("./gateway/commands/cron.js")
+      const { contextCommand } = await import("./gateway/commands/context.js")
+      const { skillCommand } = await import("./gateway/commands/skill.js")
 
       const cmdHandler = new CommandHandler()
       cmdHandler.register("/new", newCommand)
       cmdHandler.register("/reset", newCommand)
       cmdHandler.register("/stop", stopCommand)
+      cmdHandler.register("/compact", compactCommand)
       cmdHandler.register("/status", statusCommand)
       cmdHandler.register("/whoami", whoamiCommand)
       cmdHandler.register("/help", helpCommand)
       cmdHandler.register("/model", modelCommand)
+      cmdHandler.register("/think", thinkCommand)
+      cmdHandler.register("/reasoning", reasoningCommand)
       cmdHandler.register("/tentacles", tentaclesCommand)
+      cmdHandler.register("/tentacle", tentacleCommand)
+      cmdHandler.register("/cron", cronCommand)
+      cmdHandler.register("/context", contextCommand)
+      cmdHandler.register("/skill", skillCommand)
 
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
       const sessionKey = `agent:ceph:${config.session.mainKey}`
@@ -376,6 +420,150 @@ credCmd
     }
   })
 
+// ─── openceph cron ──────────────────────────────────────────────
+
+const cronCmd = program
+  .command("cron")
+  .description("Manage cron jobs")
+
+cronCmd
+  .command("list")
+  .description("List cron jobs")
+  .action(async () => {
+    const services = await createCronServices()
+    try {
+      const jobs = services.scheduler.listJobs()
+      if (jobs.length === 0) {
+        console.log("No cron jobs.")
+        return
+      }
+      for (const job of jobs) {
+        console.log(`${job.jobId} | ${job.enabled ? "enabled" : "disabled"} | ${job.sessionTarget} | next=${job.nextRunAt ?? "-"} | ${job.name}`)
+      }
+    } finally {
+      await services.shutdown()
+    }
+  })
+
+cronCmd
+  .command("add")
+  .description("Add a cron job")
+  .requiredOption("--name <name>", "Job name")
+  .option("--cron <expr>", "Cron expression")
+  .option("--every <duration>", "Fixed interval, e.g. 4h")
+  .option("--at <time>", "ISO timestamp or relative duration like 20m")
+  .option("--tz <timezone>", "IANA timezone")
+  .option("--session <target>", "main or isolated", "isolated")
+  .option("--message <message>", "Prompt message")
+  .option("--system-event <text>", "Main-session system event")
+  .option("--wake <mode>", "now or next-heartbeat", "next-heartbeat")
+  .option("--announce", "Announce result")
+  .option("--channel <channel>", "Delivery channel", "last")
+  .option("--model <model>", "Model override")
+  .option("--delete-after-run", "Delete after run")
+  .action(async (opts: any) => {
+    const services = await createCronServices()
+    try {
+      const schedule = buildScheduleFromOptions(opts)
+      const sessionTarget = opts.session === "main" ? "main" : "isolated"
+      const message = opts.systemEvent ?? opts.message
+      if (!message) {
+        throw new Error("Either --message or --system-event is required")
+      }
+      const job = await services.scheduler.addJob({
+        name: opts.name,
+        schedule,
+        sessionTarget,
+        wakeMode: opts.wake,
+        payload: sessionTarget === "main"
+          ? { kind: "systemEvent", text: message }
+          : { kind: "agentTurn", message },
+        delivery: opts.announce ? { mode: "announce", channel: opts.channel } : { mode: "none" },
+        model: opts.model,
+        deleteAfterRun: Boolean(opts.deleteAfterRun),
+      })
+      console.log(`Created cron job: ${job.jobId}`)
+    } finally {
+      await services.shutdown()
+    }
+  })
+
+cronCmd
+  .command("edit <jobId>")
+  .description("Edit a cron job")
+  .option("--cron <expr>", "Cron expression")
+  .option("--every <duration>", "Fixed interval")
+  .option("--at <time>", "At time")
+  .option("--tz <timezone>", "Timezone")
+  .option("--message <message>", "Message update")
+  .option("--model <model>", "Model override")
+  .option("--disable", "Disable job")
+  .option("--enable", "Enable job")
+  .action(async (jobId: string, opts: any) => {
+    const services = await createCronServices()
+    try {
+      const patch: any = {}
+      if (opts.cron || opts.every || opts.at) {
+        patch.schedule = buildScheduleFromOptions(opts)
+      }
+      if (opts.message) patch.message = opts.message
+      if (opts.model) patch.model = opts.model
+      if (opts.disable) patch.enabled = false
+      if (opts.enable) patch.enabled = true
+      await services.scheduler.updateJob(jobId, patch)
+      console.log(`Updated cron job: ${jobId}`)
+    } finally {
+      await services.shutdown()
+    }
+  })
+
+cronCmd
+  .command("remove <jobId>")
+  .description("Remove a cron job")
+  .action(async (jobId: string) => {
+    const services = await createCronServices()
+    try {
+      const removed = await services.scheduler.removeJob(jobId)
+      console.log(removed ? `Removed cron job: ${jobId}` : `Cron job not found: ${jobId}`)
+    } finally {
+      await services.shutdown()
+    }
+  })
+
+cronCmd
+  .command("run <jobId>")
+  .description("Run a cron job now")
+  .action(async (jobId: string) => {
+    const services = await createCronServices()
+    try {
+      await services.scheduler.runJob(jobId, "force")
+      console.log(`Triggered cron job: ${jobId}`)
+    } finally {
+      await services.shutdown()
+    }
+  })
+
+cronCmd
+  .command("runs")
+  .description("Show cron run history")
+  .requiredOption("--id <jobId>", "Job id")
+  .option("--limit <n>", "Limit", "20")
+  .action(async (opts: any) => {
+    const services = await createCronServices()
+    try {
+      const runs = await services.scheduler.getRunHistory(opts.id, Number(opts.limit))
+      if (runs.length === 0) {
+        console.log("No runs found.")
+        return
+      }
+      for (const run of runs) {
+        console.log(`${run.startedAt} | ${run.status} | ${run.error ?? "-"}`)
+      }
+    } finally {
+      await services.shutdown()
+    }
+  })
+
 // ─── openceph logs ───────────────────────────────────────────────
 
 program
@@ -486,7 +674,565 @@ program
     }
   })
 
+// ─── openceph status ─────────────────────────────────────────────
+
+program
+  .command("status")
+  .description("Show OpenCeph system status")
+  .action(async () => {
+    try {
+      const config = loadConfig()
+      initLoggers(config)
+      const snapshot = await readStatusSnapshot(config)
+
+      console.log("OpenCeph Status")
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+      console.log(`Brain:    ${snapshot.brain.running ? `running (pid ${snapshot.brain.pid ?? "?"})` : "stopped"}${snapshot.brain.uptime ? ` (uptime: ${snapshot.brain.uptime})` : ""}`)
+      console.log(`Model:    ${snapshot.model}`)
+      console.log(`Session:  ${snapshot.session.sessionKey} (tokens: ${snapshot.session.totalTokens} in / ${snapshot.session.outputTokens} out)`)
+      console.log(`Gateway:  ${snapshot.gateway.running ? `running (pid ${snapshot.gateway.pid ?? "?"})` : "stopped"}${snapshot.gateway.port ? ` (port ${snapshot.gateway.port})` : ""}`)
+      console.log(`Channels: ${snapshot.channels.length > 0 ? snapshot.channels.join("  ") : "none active"}`)
+
+      console.log()
+      console.log(`Tentacles: ${snapshot.tentacles.running} running, ${snapshot.tentacles.weakened} weakened, ${snapshot.tentacles.crashed} crashed`)
+      for (const t of snapshot.tentacles.items) {
+        if (t.status === "killed") continue
+        const healthStr = t.health ? ` (health: ${t.health})` : ""
+        const lastReport = t.lastReport ? `, last report: ${t.lastReport}` : ""
+        console.log(`  ${t.id.padEnd(24)} ${t.status.padEnd(10)}${healthStr}${lastReport}`)
+      }
+
+      console.log()
+      console.log(`Pending Push: ${snapshot.pendingPush} items`)
+      console.log(`Today's Cost: $${snapshot.todayCost.toFixed(2)} / $${config.cost.dailyLimitUsd} limit`)
+      console.log(`Cache Hit Rate: ${snapshot.cacheStats.hitRate}%`)
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
+// ─── openceph cost ──────────────────────────────────────────────
+
+program
+  .command("cost")
+  .description("Show cost summary")
+  .action(async () => {
+    try {
+      const config = loadConfig()
+      const logDir = config.logging.logDir
+
+      const todayCost = await readTodayCost(logDir)
+      const weekCost = await readCostRange(logDir, 7)
+      const monthCost = await readCostRange(logDir, 30)
+
+      // Read cost breakdown by type
+      const breakdown = await readCostBreakdown(logDir, 30)
+      const cacheStats = await readCacheStats(logDir, 30)
+
+      console.log("Cost Summary")
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+      console.log(`Today: $${todayCost.toFixed(2)} | This Week: $${weekCost.toFixed(2)} | This Month: $${monthCost.toFixed(2)}`)
+
+      if (Object.keys(breakdown).length > 0) {
+        const total = Object.values(breakdown).reduce((s, v) => s + v, 0)
+        const parts = Object.entries(breakdown)
+          .sort((a, b) => b[1] - a[1])
+          .map(([type, cost]) => `${type} ${total > 0 ? ((cost / total) * 100).toFixed(0) : 0}%`)
+        console.log(`By Type: ${parts.join(" | ")}`)
+      }
+
+      console.log(`Cache Savings: ${cacheStats.estimatedSavingsUsd.toFixed(2)} this month`)
+      console.log(`Cache Hit Rate: ${cacheStats.hitRate}%`)
+      console.log(`Daily Limit: $${config.cost.dailyLimitUsd}`)
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
+// ─── openceph doctor ────────────────────────────────────────────
+
+program
+  .command("doctor")
+  .description("Check system health and fix issues")
+  .option("--fix", "Attempt to fix detected issues")
+  .action(async (opts: { fix?: boolean }) => {
+    try {
+      const issues = await runDoctorChecks(Boolean(opts.fix))
+
+      // Print results
+      const fixableCount = issues.filter((i) => i.status !== "ok" && i.fixable).length
+      for (const issue of issues) {
+        const icon = issue.status === "ok" ? "✅" : issue.status === "warn" ? "⚠️" : "❌"
+        console.log(`${icon} ${issue.check}: ${issue.message}`)
+      }
+
+      const errorCount = issues.filter((i) => i.status !== "ok").length
+      if (errorCount === 0) {
+        console.log("\nAll checks passed.")
+      } else if (!opts.fix && fixableCount > 0) {
+        console.log(`\nIssues: ${errorCount} → Run 'openceph doctor --fix' to auto-fix ${fixableCount}`)
+      }
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
+// ─── openceph plugin ────────────────────────────────────────────
+
+const pluginCmd = program
+  .command("plugin")
+  .description("Manage Extension Channel plugins")
+
+pluginCmd
+  .command("list")
+  .description("List installed Extension Channel plugins")
+  .action(async () => {
+    try {
+      const config = loadConfig()
+      initLoggers(config)
+      const { PluginLoader } = await import("./gateway/plugin-loader.js")
+      const loader = new PluginLoader(process.cwd(), config.plugins)
+      const discovered = await loader.discover()
+      const pluginState = readPluginState()
+
+      if (discovered.length === 0) {
+        console.log("No Extension Channel plugins found.")
+        console.log("Install one with: openceph plugin install <package>")
+        return
+      }
+
+      console.log("Extension Channel Plugins")
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+      for (const plugin of discovered) {
+        const loaded = pluginState.loaded.some((item) => item.channelId === plugin.channelId)
+        console.log(`  ${plugin.displayName} (${plugin.packageName}@${plugin.version})${loaded ? " [loaded]" : ""}`)
+        console.log(`    Channel ID: ${plugin.channelId}`)
+        console.log(`    Entry: ${plugin.entryPath}`)
+      }
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
+pluginCmd
+  .command("install <package>")
+  .description("Install an Extension Channel plugin via npm")
+  .action(async (pkg: string) => {
+    try {
+      const { execSync } = await import("child_process")
+      console.log(`Installing ${pkg}...`)
+      execSync(`npm install ${pkg}`, { stdio: "inherit", cwd: process.cwd() })
+
+      const config = loadConfig()
+      initLoggers(config)
+      const { PluginLoader } = await import("./gateway/plugin-loader.js")
+      const loader = new PluginLoader(process.cwd(), config.plugins)
+      const discovered = await loader.discover()
+      const installed = discovered.find((d) => d.packageName === pkg || d.packageName.endsWith(`/${pkg}`))
+
+      if (installed) {
+        await loader.load(installed)
+        await writePluginOperation({ type: "install", packageName: installed.packageName, at: new Date().toISOString() })
+        console.log(`\nPlugin installed: ${installed.displayName} (channel: ${installed.channelId})`)
+        console.log("Gateway hot-reload signal emitted.")
+      } else {
+        console.log(`\nPackage installed but no openceph-channel plugin found.`)
+        console.log(`Ensure the package has keywords: ["openceph-channel"] and openceph.channelPlugin in package.json.`)
+      }
+    } catch (err: any) {
+      console.error(`Failed to install: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
+pluginCmd
+  .command("uninstall <package>")
+  .description("Uninstall an Extension Channel plugin")
+  .action(async (pkg: string) => {
+    try {
+      const { execSync } = await import("child_process")
+      const config = loadConfig()
+      initLoggers(config)
+      const state = readPluginState()
+      const loaded = state.loaded.find((item) => item.packageName === pkg || item.packageName.endsWith(`/${pkg}`))
+      console.log(`Uninstalling ${pkg}...`)
+      execSync(`npm uninstall ${pkg}`, { stdio: "inherit", cwd: process.cwd() })
+      await writePluginOperation({ type: "uninstall", packageName: loaded?.packageName ?? pkg, at: new Date().toISOString() })
+      console.log(`Plugin uninstalled: ${pkg}`)
+      console.log("Gateway hot-reload signal emitted.")
+    } catch (err: any) {
+      console.error(`Failed to uninstall: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
 program.parse()
+
+// ─── CLI Helpers ────────────────────────────────────────────────
+
+function parseTentaclesMd(content: string): { id: string; status: string; health?: string; lastReport?: string }[] {
+  const results: { id: string; status: string; health?: string; lastReport?: string }[] = []
+  const sectionRegex = /^###\s+(\S+)/gm
+  let match
+  while ((match = sectionRegex.exec(content)) !== null) {
+    const id = match[1]
+    const startIdx = match.index + match[0].length
+    const nextSection = content.indexOf("\n### ", startIdx)
+    const block = nextSection === -1 ? content.slice(startIdx) : content.slice(startIdx, nextSection)
+
+    let status = "unknown"
+    let health: string | undefined
+    let lastReport: string | undefined
+
+    const statusMatch = block.match(/(?:status:|- \*\*状态：\*\*)\s*(\S+)/)
+    if (statusMatch) status = statusMatch[1]
+
+    const healthMatch = block.match(/(?:health:|- \*\*健康度：\*\*)\s*(\S+)/)
+    if (healthMatch) health = healthMatch[1]
+
+    const reportMatch = block.match(/(?:lastReport:|- \*\*最后上报：\*\*)\s*(.+)/)
+    if (reportMatch) lastReport = reportMatch[1].trim()
+
+    results.push({ id, status, health, lastReport })
+  }
+  return results
+}
+
+async function readTodayCost(logDir: string): Promise<number> {
+  const today = new Date().toISOString().slice(0, 10)
+  return readCostForDate(logDir, today)
+}
+
+async function readCostForDate(logDir: string, date: string): Promise<number> {
+  const logFile = path.join(logDir, `cost-${date}.log`)
+  if (!existsSync(logFile)) return 0
+  try {
+    const content = await fs.readFile(logFile, "utf-8")
+    let total = 0
+    for (const line of content.trim().split("\n")) {
+      try {
+        const obj = JSON.parse(line)
+        if (obj.cost_usd) total += obj.cost_usd
+        else if (obj.estimated_cost_usd) total += obj.estimated_cost_usd
+      } catch { /* skip bad lines */ }
+    }
+    return total
+  } catch {
+    return 0
+  }
+}
+
+async function readCostRange(logDir: string, days: number): Promise<number> {
+  let total = 0
+  const now = new Date()
+  for (let i = 0; i < days; i++) {
+    const d = new Date(now)
+    d.setDate(d.getDate() - i)
+    const date = d.toISOString().slice(0, 10)
+    total += await readCostForDate(logDir, date)
+  }
+  return total
+}
+
+async function readCostBreakdown(logDir: string, days: number): Promise<Record<string, number>> {
+  const breakdown: Record<string, number> = {}
+  const now = new Date()
+  for (let i = 0; i < days; i++) {
+    const d = new Date(now)
+    d.setDate(d.getDate() - i)
+    const date = d.toISOString().slice(0, 10)
+    const logFile = path.join(logDir, `cost-${date}.log`)
+    if (!existsSync(logFile)) continue
+    try {
+      const content = readFileSync(logFile, "utf-8")
+      for (const line of content.trim().split("\n")) {
+        try {
+          const obj = JSON.parse(line)
+          const cost = obj.cost_usd ?? obj.estimated_cost_usd ?? 0
+          const type = obj.type ?? obj.event ?? "unknown"
+          breakdown[type] = (breakdown[type] ?? 0) + cost
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
+  }
+  return breakdown
+}
+
+function getUptime(): string | null {
+  const pidFile = path.join(OPENCEPH_HOME, "state", "brain.pid")
+  if (!existsSync(pidFile)) return null
+  try {
+    const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10)
+    if (isNaN(pid)) return null
+    // Check if process is running
+    process.kill(pid, 0)
+    // Read start time
+    const startFile = path.join(OPENCEPH_HOME, "state", "brain.start")
+    if (existsSync(startFile)) {
+      const startTime = new Date(readFileSync(startFile, "utf-8").trim()).getTime()
+      const elapsed = Date.now() - startTime
+      const hours = Math.floor(elapsed / (1000 * 60 * 60))
+      const days = Math.floor(hours / 24)
+      const mins = Math.floor((elapsed % (1000 * 60 * 60)) / (1000 * 60))
+      if (days > 0) return `${days}d ${hours % 24}h ${mins}m`
+      if (hours > 0) return `${hours}h ${mins}m`
+      return `${mins}m`
+    }
+    return "running"
+  } catch {
+    return null
+  }
+}
+
+type DoctorIssue = {
+  check: string
+  status: "ok" | "warn" | "error"
+  message: string
+  fixable?: boolean
+}
+
+async function readStatusSnapshot(config: ReturnType<typeof loadConfig>) {
+  const runtimeStatus = await readRuntimeStatus()
+  const workspaceDir = config.agents?.defaults?.workspace ?? path.join(OPENCEPH_HOME, "workspace")
+  const tentaclesPath = path.join(workspaceDir, "TENTACLES.md")
+  const tentacles = runtimeStatus.tentacles?.length
+    ? runtimeStatus.tentacles.map((item) => ({
+        id: item.tentacleId,
+        status: item.status,
+        health: item.healthScore !== undefined ? item.healthScore.toFixed(2) : undefined,
+        lastReport: item.lastReportAt,
+      }))
+    : existsSync(tentaclesPath)
+    ? parseTentaclesMd(readFileSync(tentaclesPath, "utf-8"))
+    : []
+  const outboundPath = path.join(OPENCEPH_HOME, "state", "outbound-queue.json")
+  const pendingPush = existsSync(outboundPath)
+    ? (JSON.parse(readFileSync(outboundPath, "utf-8")) as Array<{ status?: string }>).filter((item) => item.status === "pending").length
+    : 0
+  const cacheStats = await readCacheStats(config.logging.logDir, 30)
+  const sessionStore = new SessionStoreManager("ceph")
+  const sessions = await sessionStore.list()
+  const mainSession = sessions.find((entry) => entry.sessionKey === `agent:ceph:${config.session.mainKey}`) ?? sessions[0]
+  return {
+    brain: {
+      running: runtimeStatus.brain?.running ?? isPidRunning(readPid("brain.pid")),
+      pid: runtimeStatus.brain?.pid ?? readPid("brain.pid"),
+      uptime: getUptime(),
+    },
+    gateway: {
+      running: runtimeStatus.gateway?.running ?? isPidRunning(readPid("gateway.pid")),
+      pid: runtimeStatus.gateway?.pid ?? readPid("gateway.pid"),
+      port: runtimeStatus.gateway?.port ?? config.gateway.port,
+    },
+    model: runtimeStatus.brain?.model ?? config.agents.defaults.model.primary,
+    session: {
+      sessionKey: mainSession?.sessionKey ?? `agent:ceph:${config.session.mainKey}`,
+      totalTokens: mainSession?.inputTokens ?? 0,
+      outputTokens: mainSession?.outputTokens ?? 0,
+    },
+    channels: [
+      config.channels.telegram?.enabled ? "telegram ✅" : null,
+      config.channels.feishu?.enabled ? "feishu ✅" : null,
+      config.channels.webchat?.enabled ? "webchat ✅" : null,
+    ].filter(Boolean) as string[],
+    tentacles: {
+      items: tentacles,
+      running: tentacles.filter((t) => t.status === "running").length,
+      weakened: tentacles.filter((t) => t.status === "weakened").length,
+      crashed: tentacles.filter((t) => t.status === "crashed").length,
+    },
+    pendingPush,
+    todayCost: await readTodayCost(config.logging.logDir),
+    cacheStats,
+  }
+}
+
+async function readCacheStats(logDir: string, days: number): Promise<{ hitRate: number; estimatedSavingsUsd: number }> {
+  const traceFile = path.join(logDir, "cache-trace.jsonl")
+  if (!existsSync(traceFile)) return { hitRate: 0, estimatedSavingsUsd: 0 }
+
+  const content = await fs.readFile(traceFile, "utf-8")
+  let cacheRead = 0
+  let input = 0
+  for (const line of content.trim().split("\n")) {
+    if (!line.trim()) continue
+    try {
+      const obj = JSON.parse(line)
+      const ts = obj.ts ? new Date(obj.ts).getTime() : Date.now()
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
+      if (ts < cutoff) continue
+      cacheRead += Number(obj.cache_read_tokens ?? 0)
+      input += Number(obj.input_tokens ?? 0)
+    } catch {
+      // ignore malformed lines
+    }
+  }
+  const hitRate = cacheRead + input > 0 ? Math.round((cacheRead / (cacheRead + input)) * 100) : 0
+  const monthlyCost = await readCostRange(logDir, Math.min(days, 30))
+  const estimatedSavingsUsd = input > 0 ? monthlyCost * (cacheRead / Math.max(1, input)) : 0
+  return { hitRate, estimatedSavingsUsd }
+}
+
+async function runDoctorChecks(fix: boolean): Promise<DoctorIssue[]> {
+  const issues: DoctorIssue[] = []
+  let config: ReturnType<typeof loadConfig>
+  try {
+    config = loadConfig()
+    issues.push({ check: "Config", status: "ok", message: "valid" })
+  } catch (err: any) {
+    return [{ check: "Config", status: "error", message: err.message }]
+  }
+
+  const workspaceDir = config.agents?.defaults?.workspace ?? path.join(OPENCEPH_HOME, "workspace")
+  const stateDir = path.join(OPENCEPH_HOME, "state")
+
+  const credStore = new CredentialStore(CREDENTIALS_DIR)
+  const creds = await credStore.list()
+  issues.push({
+    check: "Credentials",
+    status: creds.length > 0 ? "ok" : "warn",
+    message: creds.length > 0 ? `${creds.length} credentials` : "no credentials configured",
+  })
+
+  const requiredFiles = ["SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md", "TOOLS.md", "HEARTBEAT.md", "MEMORY.md", "TENTACLES.md", "BOOTSTRAP.md"]
+  const missingFiles = requiredFiles.filter((file) => !existsSync(path.join(workspaceDir, file)))
+  if (missingFiles.length === 0) {
+    issues.push({ check: "Workspace", status: "ok", message: `${requiredFiles.length}/${requiredFiles.length} files` })
+  } else {
+    issues.push({ check: "Workspace", status: "warn", message: `missing: ${missingFiles.join(", ")}`, fixable: true })
+    if (fix) {
+      const workspaceSrc = path.join(__dirname, "templates", "workspace")
+      const workspaceSrcAlt = path.join(__dirname, "..", "src", "templates", "workspace")
+      const actualWorkspaceSrc = existsSync(workspaceSrc) ? workspaceSrc : workspaceSrcAlt
+      await copyDirIfMissing(actualWorkspaceSrc, workspaceDir)
+      issues[issues.length - 1] = { check: "Workspace", status: "ok", message: `${requiredFiles.length}/${requiredFiles.length} files` }
+    }
+  }
+
+  try {
+    await createPiContext(config)
+    issues.push({ check: "Pi Framework", status: "ok", message: "context initialized" })
+  } catch (err: any) {
+    issues.push({ check: "Pi Framework", status: "error", message: err.message })
+  }
+
+  try {
+    const { McpBridge } = await import("./mcp/mcp-bridge.js")
+    const bridge = new McpBridge(config)
+    await bridge.init()
+    issues.push({ check: "MCP", status: "ok", message: `${Object.keys(config.mcp.servers).length} server(s)` })
+    if (fix) await bridge.shutdown()
+  } catch (err: any) {
+    issues.push({ check: "MCP", status: "warn", message: err.message, fixable: Object.keys(config.mcp.servers).length > 0 })
+  }
+
+  const { MemorySearchEngine } = await import("./memory/memory-search.js")
+  const searchEngine = new MemorySearchEngine(workspaceDir)
+  const memoryDbPath = path.join(workspaceDir, "memory-index", "memory.db")
+  try {
+    await searchEngine.reindex()
+    issues.push({ check: "Memory Index", status: "ok", message: existsSync(memoryDbPath) ? "reindex ok" : "created" })
+  } catch (err: any) {
+    issues.push({ check: "Memory Index", status: "warn", message: err.message, fixable: true })
+    if (fix) {
+      await fs.rm(path.join(workspaceDir, "memory-index"), { recursive: true, force: true })
+      await searchEngine.reindex()
+      issues[issues.length - 1] = { check: "Memory Index", status: "ok", message: "reindexed" }
+    }
+  }
+
+  const socketPath = config.tentacle.ipcSocketPath
+  const brainPid = readPid("brain.pid")
+  if (existsSync(socketPath) && !isPidRunning(brainPid)) {
+    issues.push({ check: "IPC Socket", status: "warn", message: "stale socket detected", fixable: true })
+    if (fix) {
+      await fs.unlink(socketPath).catch(() => undefined)
+      issues[issues.length - 1] = { check: "IPC Socket", status: "ok", message: "stale socket removed" }
+    }
+  } else {
+    issues.push({ check: "IPC Socket", status: "ok", message: existsSync(socketPath) ? "active" : "no stale socket" })
+  }
+
+  const tentaclesPath = path.join(workspaceDir, "TENTACLES.md")
+  const tentacles = existsSync(tentaclesPath) ? parseTentaclesMd(readFileSync(tentaclesPath, "utf-8")) : []
+  const crashed = tentacles.filter((tentacle) => tentacle.status === "crashed")
+  if (crashed.length === 0) {
+    issues.push({ check: "Tentacles", status: "ok", message: `${tentacles.filter((t) => t.status !== "killed").length} active` })
+  } else {
+    issues.push({ check: "Tentacles", status: "warn", message: `${crashed.length} crashed: ${crashed.map((t) => t.id).join(", ")}`, fixable: true })
+    if (fix) {
+      const next = readFileSync(tentaclesPath, "utf-8").replace(/\*\*状态：\*\* crashed/g, "**状态：** running")
+      await fs.writeFile(tentaclesPath, next, "utf-8")
+      issues[issues.length - 1] = { check: "Tentacles", status: "ok", message: `recovered ${crashed.length} tentacle record(s)` }
+    }
+  }
+
+  if (existsSync(config.cron.store)) {
+    try {
+      JSON.parse(readFileSync(config.cron.store, "utf-8"))
+      issues.push({ check: "Cron", status: "ok", message: "store valid" })
+    } catch (err: any) {
+      issues.push({ check: "Cron", status: "warn", message: "corrupt store", fixable: true })
+      if (fix) {
+        const services = await createCronServices()
+        await services.shutdown()
+        issues[issues.length - 1] = { check: "Cron", status: "ok", message: "reloaded" }
+      }
+    }
+  } else {
+    issues.push({ check: "Cron", status: "ok", message: "no cron store yet" })
+  }
+
+  if (existsSync(config.logging.logDir)) {
+    issues.push({ check: "Logs", status: "ok", message: "directory exists" })
+  } else {
+    issues.push({ check: "Logs", status: "warn", message: "log dir missing", fixable: true })
+    if (fix) {
+      mkdirSync(config.logging.logDir, { recursive: true })
+      issues[issues.length - 1] = { check: "Logs", status: "ok", message: "directory created" }
+    }
+  }
+
+  void stateDir
+  return issues
+}
+
+function readPid(fileName: string): number | null {
+  const target = path.join(OPENCEPH_HOME, "state", fileName)
+  if (!existsSync(target)) return null
+  const pid = Number.parseInt(readFileSync(target, "utf-8").trim(), 10)
+  return Number.isFinite(pid) ? pid : null
+}
+
+function isPidRunning(pid: number | null): boolean {
+  if (!pid) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function readPluginState(): { loaded: Array<{ packageName: string; channelId: string; displayName: string; version: string }> } {
+  const statePath = path.join(OPENCEPH_HOME, "state", "plugin-state.json")
+  if (!existsSync(statePath)) return { loaded: [] }
+  try {
+    return JSON.parse(readFileSync(statePath, "utf-8"))
+  } catch {
+    return { loaded: [] }
+  }
+}
+
+async function writePluginOperation(payload: { type: "install" | "uninstall"; packageName: string; at: string }): Promise<void> {
+  const opsPath = path.join(OPENCEPH_HOME, "state", "plugin-ops.json")
+  await fs.mkdir(path.dirname(opsPath), { recursive: true })
+  await fs.writeFile(opsPath, JSON.stringify(payload, null, 2), "utf-8")
+}
 
 async function copyDirIfMissing(sourceDir: string, destDir: string): Promise<void> {
   if (!existsSync(destDir)) {
@@ -502,4 +1248,17 @@ async function copyDirIfMissing(sourceDir: string, destDir: string): Promise<voi
       copyFileSync(sourcePath, destPath)
     }
   }
+}
+
+function buildScheduleFromOptions(opts: any) {
+  if (opts.cron) {
+    return { kind: "cron" as const, expr: opts.cron, tz: opts.tz }
+  }
+  if (opts.every) {
+    return { kind: "every" as const, everyMs: parseDurationMs(opts.every) }
+  }
+  if (opts.at) {
+    return { kind: "at" as const, at: opts.at }
+  }
+  throw new Error("Specify one of --cron, --every, or --at")
 }

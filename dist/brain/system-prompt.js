@@ -33,8 +33,7 @@ export async function assembleSystemPrompt(workspaceDir, options, toolRegistry) 
         `Timezone: ${options.channel === "cli" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC"}\n` +
         "Use /status to check session token usage and model info.");
     if (options.mode === "full") {
-        // Section 9: Heartbeats (M2 placeholder)
-        sections.push("# Heartbeats\nHeartbeat scheduler not active (will be enabled in a future update).");
+        sections.push(`# Heartbeats\n${options.heartbeatSummary ?? "Heartbeat runs every 24h in the main session.\nRead HEARTBEAT.md and check all items. Reply HEARTBEAT_OK if nothing needs attention.\nCron jobs handle precise schedules."}`);
     }
     // Section 10: Runtime
     sections.push(`# Runtime\nagent=ceph | host=${options.hostname} | os=${options.osPlatform} (${options.osArch}) | node=${options.nodeVersion} | model=${options.model} | channel=${options.channel} | thinking=${options.thinkingLevel}`);

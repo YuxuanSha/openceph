@@ -12,6 +12,7 @@ export class FeishuChannelPlugin {
     displayName = "飞书 (Feishu)";
     defaultDmPolicy = "pairing";
     client = null;
+    directClient = null;
     wsClient = null;
     config = null;
     messageHandler = null;
@@ -34,36 +35,36 @@ export class FeishuChannelPlugin {
         const domain = config.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
         const logger = this.createSdkLogger();
         this.sdkLogger = logger;
-        // Create a custom httpInstance that mirrors the SDK's defaultHttpInstance
-        // interceptors. The SDK's internal token management destructures the axios
-        // response directly (e.g. `const { tenant_access_token } = await post(...)`)
-        // which requires the response interceptor to unwrap `resp.data`.
-        // Without this, the TokenManager receives the full AxiosResponse object and
-        // destructuring silently yields `undefined`, causing "Missing access token"
-        // errors (code 99991661) on every API call.
-        const httpInstance = axios.default.create(proxyMode === "direct"
-            ? { proxy: false }
-            : {});
-        httpInstance.interceptors.request.use((req) => {
-            if (req.headers) {
-                req.headers["User-Agent"] = "oapi-node-sdk/1.0.0";
+        const createHttpInstance = (mode) => {
+            const httpInstanceConfig = {};
+            if (mode === "direct") {
+                httpInstanceConfig.proxy = false;
             }
-            return req;
-        }, undefined, { synchronous: true });
-        httpInstance.interceptors.response.use((resp) => {
-            if (resp.config?.["$return_headers"]) {
-                return { data: resp.data, headers: resp.headers };
-            }
-            return resp.data;
-        });
-        this.client = new lark.Client({
+            const httpInstance = axios.default.create(httpInstanceConfig);
+            httpInstance.interceptors.request.use((req) => {
+                if (req.headers) {
+                    req.headers["User-Agent"] = "oapi-node-sdk/1.0.0";
+                }
+                return req;
+            }, undefined, { synchronous: true });
+            httpInstance.interceptors.response.use((resp) => {
+                if (resp.config?.["$return_headers"]) {
+                    return { data: resp.data, headers: resp.headers };
+                }
+                return resp.data;
+            });
+            return httpInstance;
+        };
+        const createClient = (mode) => new lark.Client({
             appId,
             appSecret,
             domain,
-            httpInstance,
+            httpInstance: createHttpInstance(mode),
             logger,
             loggerLevel: lark.LoggerLevel.info,
         });
+        this.client = createClient(proxyMode === "direct" ? "direct" : "inherit");
+        this.directClient = proxyMode === "direct" ? this.client : createClient("direct");
         // Pass a proxy agent to WSClient so the WS connection uses the system proxy.
         // The ws package doesn't auto-read HTTP_PROXY env, so we must inject it manually.
         const proxyUrl = process.env.HTTPS_PROXY ||
@@ -586,11 +587,14 @@ export class FeishuChannelPlugin {
         };
     }
     async sendReplyOrDirect(params) {
+        return this.sendReplyOrDirectWithClient(this.client, params, true);
+    }
+    async sendReplyOrDirectWithClient(client, params, allowDirectFallback) {
         const resolvedTarget = this.resolveSendTarget(params.target);
         const replyToId = params.target.replyToId?.trim();
         if (replyToId) {
             try {
-                const response = await this.client.im.message.reply({
+                const response = await client.im.message.reply({
                     path: { message_id: replyToId },
                     data: {
                         content: params.content,
@@ -607,6 +611,13 @@ export class FeishuChannelPlugin {
                 });
             }
             catch (err) {
+                if (allowDirectFallback && this.directClient && client !== this.directClient && isFeishuTransportFallbackError(err)) {
+                    gatewayLogger.warn("feishu_proxy_reply_fallback", {
+                        reply_to_id: replyToId,
+                        error: err.message,
+                    });
+                    return this.sendDirectWithClient(this.directClient, resolvedTarget, params);
+                }
                 if (!isWithdrawnReplyError(err)) {
                     throw err;
                 }
@@ -616,14 +627,30 @@ export class FeishuChannelPlugin {
                 });
             }
         }
-        return await this.client.im.message.create({
-            data: {
-                receive_id: resolvedTarget.receiveId,
-                msg_type: params.msgType,
-                content: params.content,
-            },
-            params: { receive_id_type: resolvedTarget.receiveIdType },
-        });
+        return await this.sendDirectWithClient(client, resolvedTarget, params, allowDirectFallback);
+    }
+    async sendDirectWithClient(client, resolvedTarget, params, allowDirectFallback = false) {
+        try {
+            return await client.im.message.create({
+                data: {
+                    receive_id: resolvedTarget.receiveId,
+                    msg_type: params.msgType,
+                    content: params.content,
+                },
+                params: { receive_id_type: resolvedTarget.receiveIdType },
+            });
+        }
+        catch (err) {
+            if (allowDirectFallback && this.directClient && client !== this.directClient && isFeishuTransportFallbackError(err)) {
+                gatewayLogger.warn("feishu_proxy_direct_fallback", {
+                    receive_id: resolvedTarget.receiveId,
+                    receive_id_type: resolvedTarget.receiveIdType,
+                    error: err.message,
+                });
+                return this.sendDirectWithClient(this.directClient, resolvedTarget, params, false);
+            }
+            throw err;
+        }
     }
 }
 function chunkText(text, limit) {
@@ -643,6 +670,17 @@ function chunkText(text, limit) {
     if (remaining)
         chunks.push(remaining);
     return chunks;
+}
+function isFeishuTransportFallbackError(err) {
+    if (typeof err !== "object" || err === null) {
+        return false;
+    }
+    const response = err.response;
+    if (response?.status === 502 || response?.status === 503 || response?.status === 504) {
+        return true;
+    }
+    const code = err.code;
+    return code === "ECONNRESET" || code === "ECONNREFUSED" || code === "ETIMEDOUT";
 }
 function isFeishuBackoffError(err) {
     if (typeof err !== "object" || err === null) {

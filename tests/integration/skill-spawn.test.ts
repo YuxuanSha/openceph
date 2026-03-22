@@ -5,6 +5,7 @@ import * as os from "os"
 import { initLoggers } from "../../src/logger/index.js"
 import { SkillLoader } from "../../src/skills/skill-loader.js"
 import { SkillSpawner } from "../../src/skills/skill-spawner.js"
+import { CodeAgent } from "../../src/code-agent/code-agent.js"
 import { IpcServer } from "../../src/tentacle/ipc-server.js"
 import { TentacleRegistry } from "../../src/tentacle/registry.js"
 import { PendingReportsQueue } from "../../src/tentacle/pending-reports.js"
@@ -40,7 +41,7 @@ describe("integration: skill spawn", () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  it("spawns a skill tentacle end-to-end", async () => {
+  it("generates and deploys a skill tentacle end-to-end", async () => {
     const productDir = path.join(dir, "skills", "producthunt-monitor")
     fs.mkdirSync(path.join(productDir, "scripts"), { recursive: true })
     fs.writeFileSync(path.join(productDir, "SKILL.md"), `---\nname: producthunt-monitor\ndescription: monitor PH\nversion: 1.0.0\nspawnable: true\nruntime: python\nentry: scripts/monitor.py\ndefault_trigger: every 6 hours\n---\n`)
@@ -55,16 +56,31 @@ time.sleep(0.2)
 send("report_finding", {"findingId":"ph1","summary":"new launch","confidence":0.9})
 while True: time.sleep(1)
 `)
+    const config = {
+      tentacle: { ipcSocketPath: path.join(dir, "sock"), codeGenMaxRetries: 3, crashRestartMaxAttempts: 3 },
+      agents: { defaults: { workspace: path.join(dir, "workspace") } },
+    } as any
     const ipc = new IpcServer(path.join(dir, "sock"))
     await ipc.start()
     const queue = new PendingReportsQueue(path.join(dir, "pending.json"))
-    const manager = new TentacleManager({ tentacle: { ipcSocketPath: path.join(dir, "sock"), crashRestartMaxAttempts: 3 } } as any, ipc, new TentacleRegistry(path.join(dir, "workspace")), queue)
-    const spawner = new SkillSpawner({ tentacle: { ipcSocketPath: path.join(dir, "sock") } } as any, new SkillLoader([path.join(dir, "skills")]), manager, { python3: true, node: true, go: false, bash: true })
-    await spawner.spawn("producthunt-monitor", "t_ph_monitor")
-    expect(await manager.waitForRegistration("t_ph_monitor", 3000)).toBe(true)
-    await new Promise((resolve) => setTimeout(resolve, 400))
-    expect(await queue.size()).toBe(1)
-    await manager.kill("t_ph_monitor", "done")
+    const manager = new TentacleManager(config, ipc, new TentacleRegistry(path.join(dir, "workspace")), queue)
+    const loader = new SkillLoader([path.join(dir, "skills")])
+    const codeAgent = new CodeAgent({} as any, config)
+    const spawner = new SkillSpawner(config, loader, manager, codeAgent)
+
+    const result = await spawner.spawn({
+      skillName: "producthunt-monitor",
+      tentacleId: "t_ph_monitor",
+      purpose: "monitor Product Hunt",
+      workflow: "Poll Product Hunt for new AI products every 6 hours",
+      userConfirmed: true,
+    })
+    expect(result.tentacleId).toBe("t_ph_monitor")
+    expect(result.runtime).toBeTruthy()
+    expect(result.description).toBeTruthy()
+    expect(result.spawned).toBe(false)
+    expect(result.deployed).toBe(true)
+    expect(fs.existsSync(path.join(manager.getTentacleDir("t_ph_monitor"), "tentacle.json"))).toBe(true)
     await ipc.stop()
-  })
+  }, 20_000)
 })

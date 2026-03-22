@@ -1,6 +1,7 @@
 import * as fs from "fs/promises"
 import { existsSync } from "fs"
 import * as path from "path"
+import { brainLogger } from "../logger/index.js"
 
 export interface PendingReport {
   findingId: string
@@ -12,11 +13,36 @@ export interface PendingReport {
 }
 
 export class PendingReportsQueue {
-  constructor(private statePath: string) {}
+  constructor(
+    private statePath: string,
+    private maxPending: number = 20,
+  ) {}
 
   async add(report: PendingReport): Promise<void> {
     const reports = await this.getAll()
     reports.push(report)
+    const pending = reports.filter((item) => item.status === "pending")
+    if (pending.length > this.maxPending) {
+      const overflow = pending.length - this.maxPending
+      let remainingOverflow = overflow
+      for (const item of reports) {
+        if (remainingOverflow === 0) break
+        if (item.status === "pending") {
+          item.status = "discarded"
+          remainingOverflow--
+          try {
+            brainLogger.warn("tentacle_report_discarded", {
+              tentacle_id: item.tentacleId,
+              finding_id: item.findingId,
+              reason: "pending_queue_overflow",
+            })
+          } catch {
+            // Queue overflow handling must still work in isolated test/runtime contexts
+            // where the global logger has not been initialized yet.
+          }
+        }
+      }
+    }
     await this.write(reports)
   }
 

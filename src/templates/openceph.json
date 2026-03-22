@@ -56,6 +56,57 @@
     }
   },
 
+  "heartbeat": {
+    "every": "24h",
+    "target": "none",
+    "checkAfterTurns": 100,
+    "activeHours": {
+      "start": "08:00",
+      "end": "23:00"
+    }
+  },
+
+  "cron": {
+    "enabled": true,
+    "store": "~/.openceph/cron/jobs.json",
+    "timezone": "UTC",
+    "maxConcurrentRuns": 1,
+    "sessionRetention": "24h",
+    "retry": {
+      "maxAttempts": 3,
+      "backoffMs": [60000, 120000, 300000]
+    },
+    "isolatedSessionRetention": "7d",
+    "runLog": {
+      "maxBytes": 5242880,
+      "keepLines": 500
+    }
+  },
+
+  "push": {
+    "defaultTiming": "best_time",
+    "preferredWindowStart": "09:00",
+    "preferredWindowEnd": "10:00",
+    "maxDailyPushes": 5,
+    "consolidate": true,
+    "dedup": {
+      "byUrl": true,
+      "bySimilarity": true,
+      "similarityThreshold": 0.8
+    },
+    "feedback": {
+      "enabled": true,
+      "ignoreWindowHours": 24
+    },
+    "fallbackDigestTime": "09:00",
+    "fallbackDigestTz": "UTC"
+  },
+
+  "plugins": {
+    "autoDiscover": true,
+    "allowedPackageScopes": ["@openceph", "@openceph-skills"]
+  },
+
   "tools": {
     "loopDetection": {
       "enabled": true,

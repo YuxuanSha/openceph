@@ -11,10 +11,18 @@ export declare class Gateway {
     private authProfileManager;
     private brain;
     private config;
+    private pluginLoader;
+    private pluginOpsPath;
+    private pluginStatePath;
+    private pluginOpsWatcher;
     constructor(config: OpenCephConfig, brain: Brain);
     start(): Promise<void>;
     stop(): Promise<void>;
     registerChannel(plugin: ChannelPlugin): void;
     deliverToUser(target: MessageTarget, content: OutboundContent): Promise<void>;
     get pairing(): PairingManager;
+    private watchPluginOps;
+    private handlePluginOperation;
+    private startPlugin;
+    private writePluginState;
 }

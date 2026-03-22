@@ -64,6 +64,44 @@ describe("FeishuChannelPlugin send", () => {
     })
   })
 
+  it("falls back to direct client create when reply transport fails via proxy", async () => {
+    const reply = vi.fn().mockRejectedValue({
+      message: "Request failed with status code 502",
+      response: { status: 502 },
+    })
+    const create = vi.fn()
+    const directCreate = vi.fn().mockResolvedValue({ data: { message_id: "direct-msg" } })
+    const plugin = createPlugin({ reply, create, directCreate })
+
+    await plugin.send(
+      {
+        channel: "feishu",
+        senderId: "feishu:ou_user",
+        recipientId: "feishu:ou_user",
+        replyToId: "om_parent",
+        chatId: "oc_chat",
+      },
+      {
+        text: "hello",
+        timing: "immediate",
+        priority: "normal",
+        messageId: "msg-transport-fallback",
+      },
+    )
+
+    expect(reply).toHaveBeenCalledOnce()
+    expect(create).not.toHaveBeenCalled()
+    expect(directCreate).toHaveBeenCalledOnce()
+    expect(directCreate).toHaveBeenCalledWith({
+      data: {
+        receive_id: "oc_chat",
+        msg_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+      params: { receive_id_type: "chat_id" },
+    })
+  })
+
   it("uses open_id direct send when no chat id is available", async () => {
     const reply = vi.fn()
     const create = vi.fn().mockResolvedValue({ data: { message_id: "direct-msg" } })
@@ -162,6 +200,7 @@ describe("FeishuChannelPlugin send", () => {
 function createPlugin(params: {
   reply?: ReturnType<typeof vi.fn>
   create?: ReturnType<typeof vi.fn>
+  directCreate?: ReturnType<typeof vi.fn>
 }) {
   const plugin = new FeishuChannelPlugin() as any
   plugin.config = { textChunkLimit: 2000 }
@@ -170,6 +209,13 @@ function createPlugin(params: {
       message: {
         reply: params.reply ?? vi.fn(),
         create: params.create ?? vi.fn(),
+      },
+    },
+  }
+  plugin.directClient = {
+    im: {
+      message: {
+        create: params.directCreate ?? params.create ?? vi.fn(),
       },
     },
   }

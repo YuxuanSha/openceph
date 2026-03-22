@@ -11,3 +11,9 @@ export const stopCommand = {
         return "🛑 Stopped. Message queue cleared.";
     },
 };
+export const compactCommand = {
+    async execute(args, ctx) {
+        const instructions = args.join(" ").trim() || undefined;
+        return ctx.brain.compactSession(instructions);
+    },
+};

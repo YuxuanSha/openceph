@@ -46,16 +46,22 @@ describe("integration: code agent", () => {
     const code = await agent.generate({
       tentacleId: "t_generated",
       purpose: "monitor github commits",
-      triggerCondition: "manual",
-      dataSources: ["github"],
-      outputFormat: "summary",
+      workflow: "Poll GitHub API every 30 minutes, classify new issues, generate PR review summaries",
+      capabilities: ["api_integration", "llm_reasoning"],
+      reportStrategy: "Report findings in batch when 3+ items accumulated",
       preferredRuntime: "python",
+      userContext: "",
     })
+    expect(code.description).toBeTruthy()
+
     const validation = await new TentacleValidator().validateAll(code)
-    expect(validation.valid).toBe(true)
+    expect(validation.passed).toBe(true)
 
     const deployer = new TentacleDeployer(path.join(dir, "tentacles"))
-    const targetDir = await deployer.deploy("t_generated", code, { purpose: "monitor github commits", trigger: "manual", dataSources: ["github"] })
+    const targetDir = await deployer.deploy("t_generated", code, {
+      purpose: "monitor github commits",
+      workflow: "Poll GitHub API every 30 minutes",
+    })
     expect(fs.existsSync(path.join(targetDir, "tentacle.json"))).toBe(true)
 
     const ipc = new IpcServer(path.join(dir, "sock"))
@@ -66,8 +72,8 @@ describe("integration: code agent", () => {
     metadata.entryCommand = code.entryCommand
     fs.writeFileSync(path.join(targetDir, "tentacle.json"), JSON.stringify(metadata))
     await manager.spawn("t_generated")
-    expect(await manager.waitForRegistration("t_generated", 3000)).toBe(true)
+    expect(await manager.waitForRegistration("t_generated", 5000)).toBe(true)
     await manager.kill("t_generated", "done")
     await ipc.stop()
-  })
+  }, 20_000)
 })

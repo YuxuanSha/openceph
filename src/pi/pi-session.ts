@@ -3,6 +3,7 @@ import {
   SessionManager,
   type AgentSession,
 } from "@mariozechner/pi-coding-agent"
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core"
 import { getModels, type KnownProvider } from "@mariozechner/pi-ai"
 import type { PiContext } from "./pi-context.js"
 import type { OpenCephConfig } from "../config/config-schema.js"
@@ -12,6 +13,7 @@ export interface BrainSessionOptions {
   modelId?: string
   systemPrompt?: string
   customTools?: import("@mariozechner/pi-coding-agent").ToolDefinition<any, any>[]
+  thinkingLevel?: ThinkingLevel
 }
 
 export interface BrainSession {
@@ -54,7 +56,7 @@ export async function createBrainSession(
     authStorage: piCtx.authStorage,
     modelRegistry: piCtx.modelRegistry,
     model,
-    thinkingLevel: "off",
+    thinkingLevel: options.thinkingLevel ?? "off",
     tools: [],
     customTools: options.customTools ?? [],
     sessionManager,

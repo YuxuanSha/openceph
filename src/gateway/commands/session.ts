@@ -14,3 +14,10 @@ export const stopCommand: CommandExecutor = {
     return "🛑 Stopped. Message queue cleared."
   },
 }
+
+export const compactCommand: CommandExecutor = {
+  async execute(args: string[], ctx: CommandContext): Promise<string> {
+    const instructions = args.join(" ").trim() || undefined
+    return ctx.brain.compactSession(instructions)
+  },
+}
