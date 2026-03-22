@@ -15,4 +15,8 @@ export interface CodeAgentSessionArtifact {
   modelId?: string
   resultSubtype?: string
   persistentSession?: boolean
+  resumedFromClaudeSessionId?: string
+  reusedPreviousSession?: boolean
+  reuseReason?: string
+  brainSessionKey?: string
 }

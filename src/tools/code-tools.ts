@@ -16,6 +16,7 @@ export function createCodeTools(opts: {
   config: OpenCephConfig
   piCtx: PiContext
   tentacleManager: TentacleManager
+  resolveSessionKey?: (sessionFile: string) => Promise<string | undefined>
 }): ToolRegistryEntry[] {
   const agent = new CodeAgent(opts.piCtx, opts.config)
   const deployer = new TentacleDeployer(opts.tentacleManager.getTentacleBaseDir())
@@ -45,8 +46,12 @@ export function createCodeTools(opts: {
         Type.Literal("auto"),
       ])),
     }),
-    async execute(_id, params: any) {
+    async execute(_id, params: any, _signal, _onUpdate, ctx) {
       try {
+        const sessionFile = ctx.sessionManager.getSessionFile()
+        const brainSessionKey = sessionFile
+          ? await opts.resolveSessionKey?.(sessionFile)
+          : undefined
         const requirement: CodeAgentRequirement = {
           tentacleId: params.tentacle_id,
           purpose: params.purpose,
@@ -59,8 +64,8 @@ export function createCodeTools(opts: {
           userContext: "",
         }
 
-        let generated = await agent.generate(requirement)
-        brainLogger.info("code_agent_start", { tentacle_id: params.tentacle_id })
+        let generated = await agent.generate(requirement, { brainSessionKey })
+        brainLogger.info("code_agent_start", { tentacle_id: params.tentacle_id, brain_session_key: brainSessionKey })
         let directory: string | undefined
         let deployError: string | undefined
         try {
@@ -74,9 +79,19 @@ export function createCodeTools(opts: {
           deployError = error.message
         }
 
+        const deploySucceeded = Boolean(directory)
+        await agent.finalizeInvokeCodeAgentRun({
+          tentacleId: params.tentacle_id,
+          brainSessionKey,
+          diagnostics: generated.diagnostics,
+          deployed: deploySucceeded,
+          deploySucceeded,
+          spawned: false,
+        })
+
         brainLogger.info("code_agent_success", { tentacle_id: params.tentacle_id, runtime: generated.runtime, directory })
         return ok(JSON.stringify({
-          success: true,
+          success: deploySucceeded,
           tentacle_id: params.tentacle_id,
           runtime: generated.runtime,
           entry_command: generated.entryCommand,
@@ -86,6 +101,11 @@ export function createCodeTools(opts: {
           deployed: Boolean(directory),
           spawned: false,
           description: generated.description,
+          reused_previous_session: generated.diagnostics?.reusedPreviousSession ?? false,
+          reuse_reason: generated.diagnostics?.reuseReason ?? "new_session",
+          previous_claude_session_id: generated.diagnostics?.resumedFromClaudeSessionId,
+          current_claude_session_id: generated.diagnostics?.claudeSessionId,
+          brain_session_key: brainSessionKey,
           claude_final_text: generated.diagnostics?.finalText ?? generated.description,
           claude_session_id: generated.diagnostics?.claudeSessionId,
           claude_model_id: generated.diagnostics?.modelId,

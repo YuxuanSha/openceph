@@ -1,6 +1,7 @@
 import * as fs from "fs/promises"
 import { createWriteStream, existsSync } from "fs"
 import { spawn as defaultSpawn, type ChildProcessWithoutNullStreams } from "child_process"
+import * as crypto from "crypto"
 import * as os from "os"
 import * as path from "path"
 import { fileURLToPath } from "url"
@@ -11,6 +12,7 @@ import type { PiContext } from "../pi/pi-context.js"
 import { detectRuntimes } from "../tentacle/runtime-detector.js"
 import type { TentacleCapability } from "../tentacle/contract.js"
 import type { CodeAgentSessionArtifact } from "./types.js"
+import { CodeAgentReuseStore, type CodeAgentReusableRunRecord } from "./reuse-store.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -91,9 +93,33 @@ interface RunWithPollingOptions {
   sessionFile: string
   prompt: string
   workDir: string
+  brainSessionKey?: string
+  resumeSessionId?: string
+  reuseReason?: string
 }
 
 interface RunWithPollingResult extends CodeAgentSessionArtifact {}
+
+interface CodeAgentInvocationOptions {
+  brainSessionKey?: string
+}
+
+interface CodeAgentFinalizeOptions {
+  tentacleId: string
+  brainSessionKey?: string
+  diagnostics?: CodeAgentSessionArtifact
+  deployed: boolean
+  deploySucceeded: boolean
+  spawned: boolean
+  requirementFingerprint?: string
+}
+
+interface ReuseDecision {
+  reusedPreviousSession: boolean
+  reuseReason: string
+  previousClaudeSessionId?: string
+  workDir?: string
+}
 
 interface CodeAgentDependencies {
   spawn?: typeof defaultSpawn
@@ -138,8 +164,21 @@ export class CodeAgentAlreadyRunningError extends Error {
   }
 }
 
+export class CodeAgentResumeError extends Error {
+  readonly sessionFile: string
+  readonly resumedSessionId: string
+
+  constructor(message: string, input: { sessionFile: string; resumedSessionId: string }) {
+    super(message)
+    this.name = "CodeAgentResumeError"
+    this.sessionFile = input.sessionFile
+    this.resumedSessionId = input.resumedSessionId
+  }
+}
+
 export class CodeAgent {
   private static readonly activeRuns = new Map<string, { sessionFile: string; startedAt: number }>()
+  private readonly reuseStore = new CodeAgentReuseStore()
 
   constructor(
     private readonly piCtx: PiContext,
@@ -147,7 +186,7 @@ export class CodeAgent {
     private readonly deps: CodeAgentDependencies = {},
   ) {}
 
-  async generate(requirement: CodeAgentRequirement): Promise<GeneratedCode> {
+  async generate(requirement: CodeAgentRequirement, options: CodeAgentInvocationOptions = {}): Promise<GeneratedCode> {
     return this.withExclusiveGeneratedRun(requirement.tentacleId, "generate", async (sessionFile) => {
       const runtime = await this.chooseRuntime(requirement.preferredRuntime)
       const prompt = await this.assemblePrompt({
@@ -155,7 +194,7 @@ export class CodeAgent {
         runtime,
         requirement,
       })
-      return this.runGeneratedCode(prompt, requirement, runtime, "generate", sessionFile)
+      return this.runGeneratedCode(prompt, requirement, runtime, "generate", sessionFile, options)
     })
   }
 
@@ -174,6 +213,24 @@ export class CodeAgent {
         errors,
       })
       return this.runGeneratedCode(prompt, requirement, runtime, "fix", sessionFile)
+    })
+  }
+
+  async finalizeInvokeCodeAgentRun(options: CodeAgentFinalizeOptions): Promise<void> {
+    const { brainSessionKey, tentacleId, diagnostics } = options
+    if (!brainSessionKey || !diagnostics) return
+
+    const status = options.deploySucceeded ? "consumed" : "reusable"
+    await this.reuseStore.update(brainSessionKey, tentacleId, {
+      claudeSessionId: diagnostics.claudeSessionId,
+      workDir: diagnostics.workDir,
+      sessionFile: diagnostics.sessionFile,
+      status,
+      deployed: options.deployed,
+      deploySucceeded: options.deploySucceeded,
+      spawned: options.spawned,
+      lastUsedAt: new Date().toISOString(),
+      lastRequirementFingerprint: options.requirementFingerprint ?? "",
     })
   }
 
@@ -401,12 +458,15 @@ Do NOT introduce new issues while fixing existing ones.`
     runtime: string,
     mode: "generate" | "fix" | "merge",
     sessionFile: string,
+    options: CodeAgentInvocationOptions = {},
   ): Promise<GeneratedCode> {
     if (shouldUseEmergencyFallback()) {
       return buildEmergencyFallback(requirement, runtime)
     }
 
-    const workDir = await this.prepareWorkDir(requirement.tentacleId, mode)
+    const requirementFingerprint = this.buildRequirementFingerprint(requirement)
+    const reuseDecision = await this.selectReusableRun(requirement, mode, options, requirementFingerprint)
+    const workDir = await this.prepareWorkDir(requirement.tentacleId, mode, reuseDecision.workDir)
     const promptFile = path.join(workDir, ".openceph-prompt.md")
     await fs.writeFile(promptFile, prompt, "utf-8")
 
@@ -418,6 +478,10 @@ Do NOT introduce new issues while fixing existing ones.`
         work_dir: workDir,
         session_file: sessionFile,
         runner: "claude-code-cli",
+        brain_session_key: options.brainSessionKey,
+        reused_previous_session: reuseDecision.reusedPreviousSession,
+        reuse_reason: reuseDecision.reuseReason,
+        previous_claude_session_id: reuseDecision.previousClaudeSessionId,
       })
       brainLogger.info("code_agent_session_create", {
         tentacle_id: requirement.tentacleId,
@@ -426,15 +490,73 @@ Do NOT introduce new issues while fixing existing ones.`
         session_file: sessionFile,
         work_dir: workDir,
         runner: "claude-code-cli",
+        brain_session_key: options.brainSessionKey,
+        reused_previous_session: reuseDecision.reusedPreviousSession,
+        reuse_reason: reuseDecision.reuseReason,
+        previous_claude_session_id: reuseDecision.previousClaudeSessionId,
       })
 
-      const run = await this.runWithPolling({
+      await this.persistRunState({
+        brainSessionKey: options.brainSessionKey,
         tentacleId: requirement.tentacleId,
+        mode,
         sessionFile,
-        prompt,
         workDir,
+        requirementFingerprint,
+        claudeSessionId: reuseDecision.previousClaudeSessionId,
+        status: "active",
       })
-      const generated = await this.collectGeneratedFiles(workDir, requirement, runtime, run)
+
+      let run!: RunWithPollingResult
+      try {
+        run = await this.runWithPolling({
+          tentacleId: requirement.tentacleId,
+          sessionFile,
+          prompt,
+          workDir,
+          brainSessionKey: options.brainSessionKey,
+          resumeSessionId: reuseDecision.previousClaudeSessionId,
+          reuseReason: reuseDecision.reuseReason,
+        })
+      } catch (error) {
+        if (error instanceof CodeAgentResumeError) {
+          await this.invalidateRunState(options.brainSessionKey, requirement.tentacleId)
+          const fallbackWorkDir = await this.prepareWorkDir(requirement.tentacleId, mode)
+          const fallbackPromptFile = path.join(fallbackWorkDir, ".openceph-prompt.md")
+          await fs.writeFile(fallbackPromptFile, prompt, "utf-8")
+          codeAgentLogger.warn("code_agent_reuse_fallback_new_session", {
+            tentacle_id: requirement.tentacleId,
+            brain_session_key: options.brainSessionKey,
+            previous_claude_session_id: reuseDecision.previousClaudeSessionId,
+            previous_work_dir: workDir,
+            fallback_work_dir: fallbackWorkDir,
+          })
+          try {
+            await this.persistRunState({
+              brainSessionKey: options.brainSessionKey,
+              tentacleId: requirement.tentacleId,
+              mode,
+              sessionFile,
+              workDir: fallbackWorkDir,
+              requirementFingerprint,
+              status: "active",
+            })
+            run = await this.runWithPolling({
+              tentacleId: requirement.tentacleId,
+              sessionFile,
+              prompt,
+              workDir: fallbackWorkDir,
+              brainSessionKey: options.brainSessionKey,
+              reuseReason: "resume_failed_fallback_new_session",
+            })
+          } finally {
+            await fs.unlink(fallbackPromptFile).catch(() => undefined)
+          }
+        } else {
+          throw error
+        }
+      }
+      const generated = await this.collectGeneratedFiles(run.workDir, requirement, runtime, run)
       codeAgentLogger.info("code_agent_session_success", {
         tentacle_id: requirement.tentacleId,
         mode,
@@ -443,10 +565,13 @@ Do NOT introduce new issues while fixing existing ones.`
         turn_count: run.turnCount,
         file_count: generated.files.length,
         session_file: sessionFile,
-        work_dir: workDir,
+        work_dir: generated.diagnostics?.workDir ?? workDir,
+        reused_previous_session: reuseDecision.reusedPreviousSession,
+        reuse_reason: run.reuseReason,
       })
       return generated
     } catch (error: any) {
+      await this.markRunInvalid(options.brainSessionKey, requirement.tentacleId)
       codeAgentLogger.error("code_agent_session_failed", {
         tentacle_id: requirement.tentacleId,
         mode,
@@ -479,7 +604,7 @@ Do NOT introduce new issues while fixing existing ones.`
   }
 
   private async runWithPolling(options: RunWithPollingOptions): Promise<RunWithPollingResult> {
-    const { tentacleId, sessionFile, prompt, workDir } = options
+    const { tentacleId, sessionFile, prompt, workDir, brainSessionKey, resumeSessionId, reuseReason } = options
     const polling = this.resolveClaudePollingStrategy()
     const startTime = this.now()
     let lastActivityAt = this.now()
@@ -501,6 +626,7 @@ Do NOT introduce new issues while fixing existing ones.`
     let settled = false
     let pollTimer: ReturnType<typeof setTimeout> | null = null
     let idleKillTimer: ReturnType<typeof setTimeout> | null = null
+    let sawStructuredOutput = false
 
     const writer = createJsonlWriter(sessionFile)
     const appendEvent = (event: Record<string, unknown>) => writer.write(event)
@@ -513,10 +639,23 @@ Do NOT introduce new issues while fixing existing ones.`
       timestamp: new Date(startTime).toISOString(),
       cwd: workDir,
       persistent_session: true,
+      brain_session_key: brainSessionKey,
+      resumed_from_claude_session_id: resumeSessionId,
+      reuse_reason: reuseReason,
     })
 
     return await new Promise<RunWithPollingResult>((resolve, reject) => {
-      const proc = this.spawnProc("claude", this.buildClaudeArgs(workDir), {
+      if (resumeSessionId) {
+        codeAgentLogger.info("code_agent_reuse_resume_start", {
+          tentacle_id: tentacleId,
+          brain_session_key: brainSessionKey,
+          session_file: sessionFile,
+          work_dir: workDir,
+          resumed_from_claude_session_id: resumeSessionId,
+          reuse_reason: reuseReason,
+        })
+      }
+      const proc = this.spawnProc("claude", this.buildClaudeArgs(workDir, resumeSessionId), {
         cwd: workDir,
         env: {
           ...process.env,
@@ -607,6 +746,7 @@ Do NOT introduce new issues while fixing existing ones.`
       const handleJsonLine = (line: string) => {
         const parsed = safeJsonParse(line)
         if (!parsed || typeof parsed !== "object") return
+        sawStructuredOutput = true
 
         appendEvent({
           type: "stdout_json",
@@ -714,10 +854,25 @@ Do NOT introduce new issues while fixing existing ones.`
           timestamp: new Date(this.now()).toISOString(),
           exit_code: code,
           result_subtype: resultPayload?.subtype,
+          resumed_from_claude_session_id: resumeSessionId,
         })
 
         if (settled) return
         if (code !== 0) {
+          if (resumeSessionId && !sawStructuredOutput && !stdoutBuffer.trim()) {
+            codeAgentLogger.warn("code_agent_reuse_resume_failed", {
+              tentacle_id: tentacleId,
+              brain_session_key: brainSessionKey,
+              session_file: sessionFile,
+              work_dir: workDir,
+              resumed_from_claude_session_id: resumeSessionId,
+            })
+            await fail(new CodeAgentResumeError(
+              `Claude Code resume failed for session ${resumeSessionId}`,
+              { sessionFile, resumedSessionId: resumeSessionId },
+            ))
+            return
+          }
           await fail(new CodeAgentProcessError(
             `Claude Code 退出码 ${code}: ${(stderr || stdoutBuffer).trim().slice(-500) || "unknown error"}`,
             { exitCode: code, sessionFile },
@@ -756,6 +911,10 @@ Do NOT introduce new issues while fixing existing ones.`
           modelId,
           resultSubtype,
           persistentSession: true,
+          resumedFromClaudeSessionId: resumeSessionId,
+          reusedPreviousSession: Boolean(resumeSessionId),
+          reuseReason,
+          brainSessionKey,
         }))
       })
 
@@ -1071,7 +1230,7 @@ Do NOT introduce new issues while fixing existing ones.`
     return "shell"
   }
 
-  private buildClaudeArgs(workDir: string): string[] {
+  private buildClaudeArgs(workDir: string, resumeSessionId?: string): string[] {
     const args = [
       "-p",
       "--output-format", "stream-json",
@@ -1082,6 +1241,10 @@ Do NOT introduce new issues while fixing existing ones.`
       "--add-dir", workDir,
       "--tools", "default",
     ]
+
+    if (resumeSessionId) {
+      args.push("--resume", resumeSessionId)
+    }
 
     const model = this.resolveClaudeCliModel()
     if (model) {
@@ -1162,8 +1325,8 @@ Do NOT introduce new issues while fixing existing ones.`
     }
   }
 
-  private async prepareWorkDir(tentacleId: string, mode: "generate" | "fix" | "merge"): Promise<string> {
-    const workDir = path.join(
+  private async prepareWorkDir(tentacleId: string, mode: "generate" | "fix" | "merge", reuseWorkDir?: string): Promise<string> {
+    const workDir = reuseWorkDir ?? path.join(
       os.homedir(),
       ".openceph",
       "agents",
@@ -1191,6 +1354,138 @@ Do NOT introduce new issues while fixing existing ones.`
       "sessions",
       `ca-${mode}-${tentacleId}-${Date.now()}.jsonl`,
     )
+  }
+
+  private buildRequirementFingerprint(requirement: CodeAgentRequirement): string {
+    return crypto
+      .createHash("sha1")
+      .update(JSON.stringify({
+        tentacleId: requirement.tentacleId,
+        purpose: requirement.purpose,
+        workflow: requirement.workflow,
+        capabilities: requirement.capabilities,
+        reportStrategy: requirement.reportStrategy,
+        preferredRuntime: requirement.preferredRuntime,
+        infrastructure: requirement.infrastructure,
+        externalApis: requirement.externalApis,
+      }))
+      .digest("hex")
+  }
+
+  private async selectReusableRun(
+    requirement: CodeAgentRequirement,
+    mode: "generate" | "fix" | "merge",
+    options: CodeAgentInvocationOptions,
+    requirementFingerprint: string,
+  ): Promise<ReuseDecision> {
+    if (!options.brainSessionKey || mode !== "generate") {
+      const reuseReason = options.brainSessionKey ? "reuse_not_supported_for_mode" : "missing_brain_session_key"
+      codeAgentLogger.info("code_agent_reuse_decision", {
+        tentacle_id: requirement.tentacleId,
+        brain_session_key: options.brainSessionKey,
+        reused_previous_session: false,
+        reuse_reason: reuseReason,
+      })
+      return { reusedPreviousSession: false, reuseReason }
+    }
+
+    const candidate = await this.reuseStore.getReusableRun(options.brainSessionKey, requirement.tentacleId)
+    if (!candidate) {
+      codeAgentLogger.info("code_agent_reuse_decision", {
+        tentacle_id: requirement.tentacleId,
+        brain_session_key: options.brainSessionKey,
+        reused_previous_session: false,
+        reuse_reason: "no_reusable_candidate",
+      })
+      return { reusedPreviousSession: false, reuseReason: "no_reusable_candidate" }
+    }
+
+    if (!candidate.claudeSessionId || !candidate.workDir || !existsSync(candidate.workDir)) {
+      await this.reuseStore.invalidate(options.brainSessionKey, requirement.tentacleId)
+      codeAgentLogger.info("code_agent_reuse_decision", {
+        tentacle_id: requirement.tentacleId,
+        brain_session_key: options.brainSessionKey,
+        reused_previous_session: false,
+        reuse_reason: "candidate_missing_context",
+      })
+      return { reusedPreviousSession: false, reuseReason: "candidate_missing_context" }
+    }
+
+    if (candidate.deploySucceeded || candidate.deployed || candidate.spawned || candidate.status !== "reusable") {
+      codeAgentLogger.info("code_agent_reuse_decision", {
+        tentacle_id: requirement.tentacleId,
+        brain_session_key: options.brainSessionKey,
+        reused_previous_session: false,
+        reuse_reason: "candidate_not_in_build_chain",
+      })
+      return { reusedPreviousSession: false, reuseReason: "candidate_not_in_build_chain" }
+    }
+
+    codeAgentLogger.info("code_agent_reuse_candidate_found", {
+      tentacle_id: requirement.tentacleId,
+      brain_session_key: options.brainSessionKey,
+      previous_claude_session_id: candidate.claudeSessionId,
+      previous_work_dir: candidate.workDir,
+      previous_requirement_fingerprint: candidate.lastRequirementFingerprint,
+      current_requirement_fingerprint: requirementFingerprint,
+    })
+
+    const decision: ReuseDecision = {
+      reusedPreviousSession: true,
+      reuseReason: "same_brain_session_same_tentacle_reusable_candidate",
+      previousClaudeSessionId: candidate.claudeSessionId,
+      workDir: candidate.workDir,
+    }
+    codeAgentLogger.info("code_agent_reuse_decision", {
+      tentacle_id: requirement.tentacleId,
+      brain_session_key: options.brainSessionKey,
+      reused_previous_session: true,
+      reuse_reason: decision.reuseReason,
+      previous_claude_session_id: candidate.claudeSessionId,
+      previous_work_dir: candidate.workDir,
+    })
+    return decision
+  }
+
+  private async persistRunState(input: {
+    brainSessionKey?: string
+    tentacleId: string
+    mode: "generate" | "fix" | "merge"
+    sessionFile: string
+    workDir: string
+    requirementFingerprint: string
+    claudeSessionId?: string
+    status: "active" | "reusable" | "consumed" | "invalid"
+  }): Promise<void> {
+    if (!input.brainSessionKey) return
+    await this.reuseStore.upsert({
+      brainSessionKey: input.brainSessionKey,
+      tentacleId: input.tentacleId,
+      claudeSessionId: input.claudeSessionId,
+      workDir: input.workDir,
+      sessionFile: input.sessionFile,
+      mode: input.mode,
+      createdAt: new Date().toISOString(),
+      lastUsedAt: new Date().toISOString(),
+      status: input.status,
+      deployed: false,
+      deploySucceeded: false,
+      spawned: false,
+      lastRequirementFingerprint: input.requirementFingerprint,
+    })
+  }
+
+  private async markRunInvalid(brainSessionKey: string | undefined, tentacleId: string): Promise<void> {
+    if (!brainSessionKey) return
+    await this.reuseStore.update(brainSessionKey, tentacleId, {
+      status: "invalid",
+      lastUsedAt: new Date().toISOString(),
+    })
+  }
+
+  private async invalidateRunState(brainSessionKey: string | undefined, tentacleId: string): Promise<void> {
+    if (!brainSessionKey) return
+    await this.reuseStore.invalidate(brainSessionKey, tentacleId)
   }
 }
 

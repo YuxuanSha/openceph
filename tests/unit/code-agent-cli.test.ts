@@ -20,12 +20,15 @@ class FakeClaudeProcess extends EventEmitter {
 describe("CodeAgent Claude CLI runner", () => {
   let dir: string
   let previousForceFlag: string | undefined
+  let previousHome: string | undefined
 
   beforeEach(() => {
     previousForceFlag = process.env.OPENCEPH_CODE_AGENT_FORCE_CLAUDE_CLI
     process.env.OPENCEPH_CODE_AGENT_FORCE_CLAUDE_CLI = "1"
 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "openceph-code-agent-"))
+    previousHome = process.env.HOME
+    process.env.HOME = dir
     initLoggers({
       meta: { version: "3.2" },
       gateway: { port: 18790, bind: "loopback", auth: { mode: "token", token: "x" } },
@@ -50,6 +53,11 @@ describe("CodeAgent Claude CLI runner", () => {
       delete process.env.OPENCEPH_CODE_AGENT_FORCE_CLAUDE_CLI
     } else {
       process.env.OPENCEPH_CODE_AGENT_FORCE_CLAUDE_CLI = previousForceFlag
+    }
+    if (previousHome === undefined) {
+      delete process.env.HOME
+    } else {
+      process.env.HOME = previousHome
     }
     fs.rmSync(dir, { recursive: true, force: true })
   })
@@ -274,5 +282,131 @@ describe("CodeAgent Claude CLI runner", () => {
     await expect(agent.generate(requirement)).rejects.toBeInstanceOf(CodeAgentAlreadyRunningError)
     await expect(first).resolves.toBeTruthy()
     expect(fakeSpawn).toHaveBeenCalledTimes(1)
+  })
+
+  it("reuses the previous Claude session and workdir inside the same brain session", async () => {
+    const calls: Array<{ args: string[]; cwd?: string }> = []
+    const fakeSpawn = vi.fn((_: string, args: string[], options: { cwd?: string }) => {
+      const proc = new FakeClaudeProcess() as any
+      calls.push({ args, cwd: options.cwd })
+
+      setTimeout(() => {
+        fs.writeFileSync(path.join(options.cwd!, "main.py"), "print('ok')\n", "utf-8")
+        proc.stdout.write(JSON.stringify({
+          type: "system",
+          subtype: "init",
+          session_id: args.includes("--resume") ? "claude-session-reused" : "claude-session-original",
+          model: "claude-sonnet-4-5-20250929",
+        }) + "\n")
+      }, 5)
+
+      setTimeout(() => {
+        proc.stdout.write(JSON.stringify({
+          type: "result",
+          subtype: "success",
+          result: "done",
+          num_turns: 1,
+        }) + "\n")
+        proc.emit("close", 0)
+      }, 20)
+
+      return proc
+    })
+
+    const agent = new CodeAgent({} as any, {
+      tentacle: { codeGenPollIntervalMs: 10, codeGenIdleTimeoutMs: 80, codeGenTimeoutMs: 1 },
+      models: { named: {} },
+    } as any, { spawn: fakeSpawn })
+
+    const requirement: CodeAgentRequirement = {
+      tentacleId: "t_cli_reuse",
+      purpose: "test reuse",
+      workflow: "write one file",
+      capabilities: [],
+      reportStrategy: "batch",
+      preferredRuntime: "python",
+      userContext: "",
+    }
+
+    const first = await agent.generate(requirement, { brainSessionKey: "agent:ceph:main" })
+    await agent.finalizeInvokeCodeAgentRun({
+      tentacleId: requirement.tentacleId,
+      brainSessionKey: "agent:ceph:main",
+      diagnostics: first.diagnostics,
+      deployed: false,
+      deploySucceeded: false,
+      spawned: false,
+    })
+
+    const second = await agent.generate(requirement, { brainSessionKey: "agent:ceph:main" })
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1].args).toContain("--resume")
+    expect(calls[1].args).toContain("claude-session-original")
+    expect(calls[1].cwd).toBe(calls[0].cwd)
+    expect(second.diagnostics?.reusedPreviousSession).toBe(true)
+    expect(second.diagnostics?.resumedFromClaudeSessionId).toBe("claude-session-original")
+  })
+
+  it("does not reuse a previous Claude session across different brain sessions", async () => {
+    const calls: Array<{ args: string[]; cwd?: string }> = []
+    const fakeSpawn = vi.fn((_: string, args: string[], options: { cwd?: string }) => {
+      const proc = new FakeClaudeProcess() as any
+      calls.push({ args, cwd: options.cwd })
+
+      setTimeout(() => {
+        fs.writeFileSync(path.join(options.cwd!, "main.py"), "print('ok')\n", "utf-8")
+        proc.stdout.write(JSON.stringify({
+          type: "system",
+          subtype: "init",
+          session_id: `claude-session-${calls.length}`,
+          model: "claude-sonnet-4-5-20250929",
+        }) + "\n")
+      }, 5)
+
+      setTimeout(() => {
+        proc.stdout.write(JSON.stringify({
+          type: "result",
+          subtype: "success",
+          result: "done",
+          num_turns: 1,
+        }) + "\n")
+        proc.emit("close", 0)
+      }, 20)
+
+      return proc
+    })
+
+    const agent = new CodeAgent({} as any, {
+      tentacle: { codeGenPollIntervalMs: 10, codeGenIdleTimeoutMs: 80, codeGenTimeoutMs: 1 },
+      models: { named: {} },
+    } as any, { spawn: fakeSpawn })
+
+    const requirement: CodeAgentRequirement = {
+      tentacleId: "t_cli_no_reuse",
+      purpose: "test no reuse",
+      workflow: "write one file",
+      capabilities: [],
+      reportStrategy: "batch",
+      preferredRuntime: "python",
+      userContext: "",
+    }
+
+    const first = await agent.generate(requirement, { brainSessionKey: "agent:ceph:main" })
+    await agent.finalizeInvokeCodeAgentRun({
+      tentacleId: requirement.tentacleId,
+      brainSessionKey: "agent:ceph:main",
+      diagnostics: first.diagnostics,
+      deployed: false,
+      deploySucceeded: false,
+      spawned: false,
+    })
+
+    const second = await agent.generate(requirement, { brainSessionKey: "agent:ceph:other" })
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1].args).not.toContain("--resume")
+    expect(calls[1].cwd).not.toBe(calls[0].cwd)
+    expect(second.diagnostics?.reusedPreviousSession).toBe(false)
   })
 })

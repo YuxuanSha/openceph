@@ -291,6 +291,10 @@ export class Brain {
         config: this.config,
         piCtx: this.piCtx,
         tentacleManager: this.tentacleManager,
+        resolveSessionKey: async (sessionFile) => {
+          return await this.sessionStore.resolveSessionKeyByTranscriptPath(sessionFile)
+            ?? await new SessionStoreManager("cron").resolveSessionKeyByTranscriptPath(sessionFile)
+        },
       })) {
         this.toolRegistry.register(entry)
       }
