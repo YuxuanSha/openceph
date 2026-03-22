@@ -2,9 +2,48 @@ import * as fs from "fs/promises"
 import { existsSync } from "fs"
 import * as path from "path"
 import { fileURLToPath } from "url"
+import { systemLogger } from "../logger/index.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+export type TentacleCapabilityType =
+  | "api_integration"
+  | "llm_reasoning"
+  | "database"
+  | "content_generation"
+  | "external_bot"
+  | "action_execution"
+  | string
+
+export interface CustomizableField {
+  field: string
+  description: string
+  envVar?: string
+  promptPlaceholder?: string
+  default?: string
+  example?: string
+}
+
+export interface SkillTentacleConfig {
+  spawnable: true
+  runtime: "python" | "typescript" | "go" | "shell"
+  entry: string
+  defaultTrigger: string
+  setupCommands: string[]
+  requires: {
+    bins: string[]
+    env: string[]
+  }
+  capabilities: TentacleCapabilityType[]
+  infrastructure?: {
+    needsDatabase?: boolean
+    needsLlm?: boolean
+    needsHttpServer?: boolean
+    needsExternalBot?: boolean
+  }
+  customizable?: CustomizableField[]
+}
 
 export interface SkillEntry {
   name: string
@@ -21,6 +60,10 @@ export interface SkillEntry {
   }
   triggerKeywords?: string[]
   emoji?: string
+
+  // M4 skill_tentacle fields
+  isSkillTentacle: boolean
+  skillTentacleConfig?: SkillTentacleConfig
 }
 
 export class SkillLoader {
@@ -48,6 +91,17 @@ export class SkillLoader {
 
   getSpawnable(): SkillEntry[] {
     return Array.from(this.skills.values()).filter((skill) => skill.spawnable)
+  }
+
+  async loadSingle(dir: string): Promise<SkillEntry | undefined> {
+    const skillMdPath = path.join(dir, "SKILL.md")
+    if (!existsSync(skillMdPath)) return undefined
+    try {
+      const content = await fs.readFile(skillMdPath, "utf-8")
+      return parseSkillContent(content, dir)
+    } catch {
+      return undefined
+    }
   }
 
   async readSkillContent(name: string): Promise<{ content: string; references: string[] }> {
@@ -78,6 +132,9 @@ export class SkillLoader {
         const skill = parseSkillContent(content, path.join(basePath, entry.name))
         this.skills.set(skill.name, skill)
         foundAny = true
+        if (skill.isSkillTentacle) {
+          systemLogger.info("skill_tentacle_discovered", { name: skill.name, path: skill.path })
+        }
       }
     }
     return foundAny
@@ -99,12 +156,64 @@ function parseSkillContent(content: string, skillDir: string): SkillEntry {
   const setupCommands = asStringArray(frontmatter.setup_commands)
   const requires = toStringRecord(frontmatter.requires)
 
+  // M4: Detect metadata.openceph.tentacle for skill_tentacle
+  const metadata = frontmatter.metadata as Record<string, unknown> | undefined
+  const opencephMeta = metadata?.openceph as Record<string, unknown> | undefined
+  const tentacleMeta = opencephMeta?.tentacle as Record<string, unknown> | undefined
+  const metaSpawnable = tentacleMeta ? asBoolean(tentacleMeta.spawnable) : false
+
+  // Extract openceph-level emoji and trigger_keywords
+  const metaEmoji = opencephMeta ? asString(opencephMeta.emoji) : undefined
+  const metaTriggerKeywords = opencephMeta ? asStringArray(opencephMeta.trigger_keywords) : []
+
+  // skill_tentacle detection: metadata.openceph.tentacle.spawnable + prompt/SYSTEM.md + src/ + README.md
+  const isSkillTentacle = metaSpawnable
+    && existsSync(path.join(skillDir, "prompt", "SYSTEM.md"))
+    && existsSync(path.join(skillDir, "src"))
+    && existsSync(path.join(skillDir, "README.md"))
+
+  // Parse skill_tentacle config from metadata.openceph.tentacle
+  let skillTentacleConfig: SkillTentacleConfig | undefined
+  if (isSkillTentacle && tentacleMeta) {
+    const tRuntime = asString(tentacleMeta.runtime) ?? runtime ?? "python"
+    const tEntry = asString(tentacleMeta.entry) ?? entry ?? "src/main.py"
+    const tDefaultTrigger = asString(tentacleMeta.default_trigger) ?? defaultTrigger ?? "every 30 minutes"
+    const tSetupCommands = asStringArray(tentacleMeta.setup_commands).length > 0
+      ? asStringArray(tentacleMeta.setup_commands)
+      : setupCommands
+    const tRequires = tentacleMeta.requires
+      ? toStringRecord(tentacleMeta.requires)
+      : requires
+    const tCapabilities = asStringArray(tentacleMeta.capabilities)
+    const tInfra = tentacleMeta.infrastructure as Record<string, unknown> | undefined
+    const tCustomizable = parseCustomizableFields(tentacleMeta.customizable)
+
+    skillTentacleConfig = {
+      spawnable: true,
+      runtime: tRuntime as SkillTentacleConfig["runtime"],
+      entry: tEntry,
+      defaultTrigger: tDefaultTrigger,
+      setupCommands: tSetupCommands,
+      requires: tRequires,
+      capabilities: tCapabilities,
+      infrastructure: tInfra ? {
+        needsDatabase: asBoolean(tInfra.needsDatabase),
+        needsLlm: asBoolean(tInfra.needsLlm),
+        needsHttpServer: asBoolean(tInfra.needsHttpServer),
+        needsExternalBot: asBoolean(tInfra.needsExternalBot),
+      } : undefined,
+      customizable: tCustomizable.length > 0 ? tCustomizable : undefined,
+    }
+  }
+
+  const effectiveSpawnable = spawnable || metaSpawnable
+
   return {
     name,
     description,
     version,
     path: skillDir,
-    spawnable,
+    spawnable: effectiveSpawnable,
     tentacleConfig: runtime || entry || defaultTrigger || setupCommands.length > 0 || requires.bins.length > 0 || requires.env.length > 0
       ? {
           runtime,
@@ -113,10 +222,36 @@ function parseSkillContent(content: string, skillDir: string): SkillEntry {
           setupCommands,
           requires,
         }
+      : skillTentacleConfig ? {
+          runtime: skillTentacleConfig.runtime,
+          entry: skillTentacleConfig.entry,
+          defaultTrigger: skillTentacleConfig.defaultTrigger,
+          setupCommands: skillTentacleConfig.setupCommands,
+          requires: skillTentacleConfig.requires,
+        }
       : undefined,
-    triggerKeywords: asStringArray(frontmatter.trigger_keywords),
-    emoji: asString(frontmatter.emoji),
+    triggerKeywords: metaTriggerKeywords.length > 0
+      ? metaTriggerKeywords
+      : asStringArray(frontmatter.trigger_keywords),
+    emoji: metaEmoji ?? asString(frontmatter.emoji),
+    isSkillTentacle,
+    skillTentacleConfig,
   }
+}
+
+function parseCustomizableFields(value: unknown): CustomizableField[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => item !== null && typeof item === "object")
+    .map((item) => ({
+      field: asString(item.field) ?? "",
+      description: asString(item.description) ?? "",
+      envVar: asString(item.env_var),
+      promptPlaceholder: asString(item.prompt_placeholder),
+      default: asString(item.default),
+      example: asString(item.example),
+    }))
+    .filter((f) => f.field)
 }
 
 function parseFrontmatter(content: string): Record<string, unknown> {
@@ -164,16 +299,32 @@ function parseIndentedBlock(lines: string[]): unknown {
   const trimmed = lines.filter((line) => line.trim())
   if (trimmed.length === 0) return ""
 
+  // Simple list: all items are "- scalar"
   if (trimmed.every((line) => line.trim().startsWith("- "))) {
     return trimmed.map((line) => parseScalar(line.trim().slice(2).trim()))
   }
 
+  // List of objects: first line starts with "- key:" and subsequent lines are indented
+  const firstStripped = trimmed[0].trim()
+  if (firstStripped.startsWith("- ")) {
+    return parseListOfObjects(trimmed)
+  }
+
+  // Determine the base indentation level (minimum indent of first key line)
+  const baseIndent = trimmed.reduce((min, line) => {
+    const m = line.match(/^(\s*)/)
+    const indent = m ? m[1].length : 0
+    return indent < min ? indent : min
+  }, Infinity)
+
   const result: Record<string, unknown> = {}
   let i = 0
   while (i < trimmed.length) {
-    const line = trimmed[i].replace(/^\s+/, "")
-    const match = line.match(/^([A-Za-z0-9_]+):(?:\s*(.*))?$/)
-    if (!match) {
+    const line = trimmed[i]
+    const lineIndent = (line.match(/^(\s*)/) || ["", ""])[1].length
+    const stripped = line.trim()
+    const match = stripped.match(/^([A-Za-z0-9_]+):(?:\s*(.*))?$/)
+    if (!match || lineIndent > baseIndent) {
       i++
       continue
     }
@@ -186,15 +337,55 @@ function parseIndentedBlock(lines: string[]): unknown {
       continue
     }
 
-    const arrayLines: string[] = []
+    // Collect nested content — lines with deeper indentation
+    const nestedLines: string[] = []
     i++
-    while (i < trimmed.length && trimmed[i].trim().startsWith("- ")) {
-      arrayLines.push(trimmed[i])
+    while (i < trimmed.length) {
+      const nextLineIndent = (trimmed[i].match(/^(\s*)/) || ["", ""])[1].length
+      if (nextLineIndent <= baseIndent) break
+      nestedLines.push(trimmed[i])
       i++
     }
-    result[key] = arrayLines.map((item) => parseScalar(item.trim().slice(2).trim()))
+    if (nestedLines.length > 0) {
+      result[key] = parseIndentedBlock(nestedLines)
+    } else {
+      result[key] = ""
+    }
   }
   return result
+}
+
+function parseListOfObjects(lines: string[]): unknown[] {
+  const items: string[][] = []
+  let current: string[] = []
+
+  for (const line of lines) {
+    const stripped = line.trim()
+    if (stripped.startsWith("- ")) {
+      if (current.length > 0) items.push(current)
+      // Convert "- key: value" to "key: value" for the first line of the item
+      current = [stripped.slice(2)]
+    } else {
+      current.push(stripped)
+    }
+  }
+  if (current.length > 0) items.push(current)
+
+  return items.map((itemLines) => {
+    // If single line, treat as scalar
+    if (itemLines.length === 1 && !itemLines[0].includes(":")) {
+      return parseScalar(itemLines[0])
+    }
+    // Parse as key-value object
+    const obj: Record<string, unknown> = {}
+    for (const itemLine of itemLines) {
+      const m = itemLine.match(/^([A-Za-z0-9_]+):(?:\s*(.*))?$/)
+      if (m) {
+        obj[m[1]] = parseScalar((m[2] ?? "").trim())
+      }
+    }
+    return obj
+  })
 }
 
 function parseScalar(value: string): unknown {

@@ -81,4 +81,89 @@ describe("TentacleManager", () => {
     expect(manager.getStatus("t1")?.status).toBe("killed")
     await ipc.stop()
   })
+
+  it("injects model runtime env from openceph.json-style config into tentacles", async () => {
+    const socketPath = path.join(dir, "sock-model")
+    const ipc = new IpcServer(socketPath)
+    await ipc.start()
+    const manager = new TentacleManager(
+      {
+        agents: {
+          defaults: {
+            workspace: path.join(dir, "workspace"),
+            model: { primary: "openrouter/anthropic/claude-opus-4-6", fallbacks: [] },
+            models: {
+              "openrouter/anthropic/claude-opus-4-6": {
+                params: { temperature: 0.4 },
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.ai/api/v1",
+              api: "openai-completions",
+            },
+          },
+          named: {},
+        },
+        auth: {
+          profiles: {
+            "openrouter:primary": {
+              mode: "api_key",
+              apiKey: "sk-runtime-value",
+            },
+          },
+          order: {
+            openrouter: ["openrouter:primary"],
+          },
+        },
+        tentacle: { ipcSocketPath: socketPath, crashRestartMaxAttempts: 3 },
+      } as any,
+      ipc,
+      new TentacleRegistry(path.join(dir, "workspace")),
+      new PendingReportsQueue(path.join(dir, "pending.json")),
+    )
+
+    const tentacleDir = manager.getTentacleDir("t_model_env")
+    const dumpPath = path.join(tentacleDir, "env.json")
+    fs.mkdirSync(tentacleDir, { recursive: true })
+    fs.writeFileSync(path.join(tentacleDir, "register.mjs"), `
+      import * as fs from 'node:fs';
+      import * as net from 'node:net';
+      fs.writeFileSync(${JSON.stringify(dumpPath)}, JSON.stringify({
+        openrouterKey: process.env.OPENROUTER_API_KEY,
+        openrouterModel: process.env.OPENROUTER_MODEL,
+        llmBaseUrl: process.env.OPENCEPH_LLM_BASE_URL,
+        llmModel: process.env.OPENCEPH_LLM_MODEL,
+        llmParams: process.env.OPENCEPH_LLM_PARAMS_JSON,
+      }, null, 2));
+      const socket = net.createConnection(process.env.OPENCEPH_SOCKET_PATH);
+      socket.on('connect', () => {
+        socket.write(JSON.stringify({type:'tentacle_register',sender:'t_model_env',receiver:'brain',payload:{purpose:'test',runtime:'node'},timestamp:new Date().toISOString(),message_id:'1'})+'\\n');
+        setInterval(() => {}, 1000);
+      });
+    `)
+    fs.writeFileSync(path.join(tentacleDir, "tentacle.json"), JSON.stringify({
+      tentacleId: "t_model_env",
+      purpose: "test",
+      runtime: "node",
+      entryCommand: "node register.mjs",
+      cwd: tentacleDir,
+    }))
+
+    await manager.spawn("t_model_env")
+    expect(await manager.waitForRegistration("t_model_env", 3000)).toBe(true)
+
+    const envDump = JSON.parse(fs.readFileSync(dumpPath, "utf-8"))
+    expect(envDump.openrouterKey).toBe("sk-runtime-value")
+    expect(envDump.openrouterModel).toBe("anthropic/claude-opus-4-6")
+    expect(envDump.llmBaseUrl).toBe("https://openrouter.ai/api/v1")
+    expect(envDump.llmModel).toBe("anthropic/claude-opus-4-6")
+    expect(envDump.llmParams).toBe("{\"temperature\":0.4}")
+
+    expect(await manager.kill("t_model_env", "test")).toBe(true)
+    await ipc.stop()
+  })
 })

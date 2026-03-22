@@ -2,6 +2,8 @@
 
 OpenCeph 是一个基于 Pi 框架的 AI 个人操作系统，让你可以透过多个渠道（Telegram、飞书、WebChat、CLI）与你的"大脑"对话。大脑拥有人格、记忆、会搜索，并支持完整的 Workspace 文件体系。
 
+当前代码库已经包含主动推送链路、触手系统、Cron / Heartbeat 调度、技能孵化和内置 skill_tentacle。`openceph init` 后会自动安装一组开箱即用的内置触手，支持信息监控、每日简报、价格提醒、可用性监控等场景。
+
 ## 功能特性
 
 ### 已完成 (Phase 0 + Phase 1)
@@ -15,6 +17,17 @@ OpenCeph 是一个基于 Pi 框架的 AI 个人操作系统，让你可以透过
 - **配对系统**: 新用户需要审批才能对话（pairing 流程）
 - **成本追踪**: 记录每次 API 调用的 token 消耗
 - **Prompt Cache**: 支持 Anthropic 的 prompt caching，降低成本
+
+### 新增能力 (Phase 2 ~ Phase 7)
+
+- **触手系统**: Brain 可孵化、运行、暂停、恢复、销毁独立 Tentacle 进程
+- **主动推送**: 触手发现可通过 `send_to_user` 进入主 session 并投递到 IM 渠道
+- **跨 Session 双写**: consultation / cron session 中的推送会在投递时写入主 session transcript
+- **消息合并**: 连续 assistant 推送会在 API 请求前运行时合并，避免上下文格式冲突
+- **推送队列**: 支持 `immediate`、`best_time`、`morning_digest` 三种投递时机
+- **Cron / Heartbeat**: 支持定时任务、每日复盘、晨间兜底推送
+- **SKILL / skill_tentacle**: 支持从技能直接孵化触手，也支持内置触手自动安装
+- **内置触手**: 自带 7 个 builtin tentacles，覆盖 HN、GitHub Release、daily digest、arXiv、价格、uptime、触手生成器
 
 ## 快速开始
 
@@ -45,12 +58,24 @@ npm run start -- init
 ├── openceph.json      # 主配置文件
 ├── credentials/       # 凭据存储（权限 700）
 ├── workspace/        # 工作空间（SOUL.md、AGENTS.md 等）
+├── skills/           # 内置/社区 skill_tentacle 安装目录
 ├── brain/            # Pi 框架数据
 ├── agents/          # Agent 会话存储
-├── tentacles/       # 触手（未来功能）
+├── tentacles/       # 已孵化的触手运行目录
+├── cron/            # Cron 任务与执行记录
 ├── logs/            # 日志文件
 └── state/           # 状态文件
 ```
+
+首次 `init` 默认会把以下内置触手复制到 `~/.openceph/skills/`：
+
+- `skill-tentacle-creator`
+- `hn-radar`
+- `github-release-watcher`
+- `daily-digest-curator`
+- `arxiv-paper-scout`
+- `price-alert-monitor`
+- `uptime-watchdog`
 
 ### 3. 配置 API Key
 
@@ -81,9 +106,50 @@ npm run dev -- credentials list
     defaults: {
       workspace: "~/.openceph/workspace",
       model: {
-        primary: "openrouter/anthropic/claude-sonnet-4-5",
-        fallbacks: ["openai/gpt-4o"]
+        primary: "openrouter/anthropic/claude-opus-4-6",
+        fallbacks: []
+      },
+      models: {
+        "openrouter/anthropic/claude-opus-4-6": {
+          alias: "Opus",
+          params: {
+            temperature: 0.4,
+            cacheRetention: "short"
+          }
+        }
       }
+    }
+  },
+
+  tentacle: {
+    ipcSocketPath: "~/.openceph/openceph.sock",
+    model: {
+      primary: "openrouter/anthropic/claude-opus-4-6",
+      fallbacks: []
+    },
+    models: {
+      "openrouter/anthropic/claude-opus-4-6": {
+        alias: "TentacleOpus",
+        params: {
+          temperature: 0.4,
+          cacheRetention: "short"
+        }
+      }
+    },
+    providers: {
+      openrouter: {
+        baseUrl: "https://openrouter.ai/api/v1",
+        api: "openai-completions"
+      }
+    },
+    auth: {
+      profiles: {
+        "openrouter:tentacle": {
+          mode: "api_key",
+          apiKey: "from:credentials/openrouter"
+        }
+      },
+      order: { openrouter: ["openrouter:tentacle"] }
     }
   },
 
@@ -101,11 +167,34 @@ npm run dev -- credentials list
   channels: {
     telegram: { enabled: false },
     feishu: { enabled: false },
-    webchat: { enabled: true },
-    cli: { enabled: true }
+    webchat: { enabled: true }
+  },
+
+  builtinTentacles: {
+    autoInstallOnInit: true,
+    autoUpgradeOnUpdate: true,
+    skipList: []
+  },
+
+  push: {
+    defaultTiming: "best_time",
+    preferredWindowStart: "09:00",
+    preferredWindowEnd: "10:00",
+    fallbackDigestTime: "09:00",
+    fallbackDigestTz: "UTC"
   }
 }
 ```
+
+说明：
+
+- `agents.defaults.*` + 顶层 `models/auth` 是大脑 Agent 使用的模型配置
+- `tentacle.model` + `tentacle.models` + `tentacle.providers` + `tentacle.auth` 是触手运行时使用的独立模型配置
+- 如果你希望触手和大脑用同一个模型，直接把大脑那套 provider / auth / model / params 原样复制到 `tentacle.*` 即可
+- 触手会优先读取 `tentacle.*`；如果未配置，才会回退到旧的全局配置
+- `chat` 是单独的 CLI 模式，不需要在 `channels` 里配置 `cli`
+- `builtinTentacles` 控制 `init` / `upgrade` 时 builtin tentacle 的安装和更新策略
+- `push` 控制主动推送的默认窗口、晨报兜底时间和每日限制
 
 ### 5. 启动
 
@@ -115,6 +204,12 @@ npm run dev -- start
 
 # 或仅 CLI 对话（不启动 Gateway，适合开发调试）
 npm run dev -- chat
+```
+
+如果你已经初始化过旧版本，再同步最新内置触手：
+
+```bash
+npm run dev -- upgrade
 ```
 
 ### 6. 使用 CLI 对话
@@ -315,6 +410,7 @@ openceph pairing revoke telegram tg:123456789
 | 命令 | 说明 |
 |------|------|
 | `openceph init` | 初始化 OpenCeph |
+| `openceph upgrade` | 同步 builtin tentacles 到 `~/.openceph/skills/` |
 | `openceph start` | 启动完整服务 |
 | `openceph chat` | CLI 对话模式 |
 | `openceph credentials set <key> [value]` | 设置凭据 |
@@ -324,6 +420,12 @@ openceph pairing revoke telegram tg:123456789
 | `openceph pairing list` | 列出配对请求 |
 | `openceph pairing approve <code>` | 批准配对 |
 | `openceph pairing reject <code>` | 拒绝配对 |
+| `openceph cron list/add/edit/remove/run/runs` | 管理 Cron 任务 |
+| `openceph tentacle list/start/stop/pause/resume/kill` | 管理触手生命周期 |
+| `openceph status` | 查看系统状态 |
+| `openceph cost` | 查看成本摘要 |
+| `openceph doctor [--fix]` | 运行健康检查 |
+| `openceph plugin list/install/uninstall` | 管理扩展渠道插件 |
 | `openceph logs [brain\|gateway\|system\|cost] [--tail <n>]` | 查看日志 |
 
 ## 配置说明
@@ -382,6 +484,58 @@ session: {
 }
 ```
 
+### Builtin Tentacles 配置
+
+```json5
+builtinTentacles: {
+  autoInstallOnInit: true,
+  autoUpgradeOnUpdate: true,
+  skipList: ["price-alert-monitor"]  // 可选：跳过某些内置触手
+}
+```
+
+### Push 配置
+
+```json5
+push: {
+  defaultTiming: "best_time",     // immediate | best_time | morning_digest
+  preferredWindowStart: "09:00",
+  preferredWindowEnd: "10:00",
+  maxDailyPushes: 5,
+  consolidate: true,
+  fallbackDigestTime: "09:00",
+  fallbackDigestTz: "UTC"
+}
+```
+
+## 内置触手
+
+`openceph init` 后会自动安装以下 7 个 builtin tentacles：
+
+| 名称 | 用途 |
+|------|------|
+| `skill-tentacle-creator` | 生成新的可运行 skill_tentacle 脚手架并做本地校验/打包 |
+| `hn-radar` | 监控 Hacker News，支持 RSS + Algolia、规则过滤、可选 LLM 过滤 |
+| `github-release-watcher` | 跟踪 GitHub Release / Tag 更新 |
+| `daily-digest-curator` | 从 state 中的待推送/待处理内容生成每日简报 |
+| `arxiv-paper-scout` | 监控 arXiv 分类与关键词，并可用 LLM 进行质量判断 |
+| `price-alert-monitor` | 监控价格变化，支持 `json_path` / `selector` / `pattern` 抽取 |
+| `uptime-watchdog` | 监控 HTTP 端点可用性、恢复和慢响应 |
+
+这些触手的源代码位于仓库的 `builtin-tentacles/`，运行副本位于 `~/.openceph/skills/` 和 `~/.openceph/tentacles/`。
+
+## 主动推送链路
+
+当前版本已经实现完整的触手推送协议：
+
+1. 触手通过 IPC 向 Brain 发起 consultation request
+2. Brain 在 consultation / cron session 中决定是否调用 `send_to_user`
+3. `immediate` 推送会立刻投递到渠道，并把推送内容写入主 session
+4. `best_time` / `morning_digest` 会进入统一出站队列，随后在用户活跃窗口或晨间兜底任务中投递
+5. 连续 assistant 推送在发给模型前会由 `push-message-merger` 进行运行时合并
+
+因此，用户后续回复一条推送内容时，大脑可以在主 session 上下文里自然理解这条回复。
+
 ## 凭据系统
 
 支持多种凭据来源：
@@ -432,6 +586,12 @@ npm run build
 
 # 运行测试
 npm test
+
+# TypeScript 编译检查
+npm run build
+
+# Python 内置触手语法检查
+python3 -m py_compile builtin-tentacles/*/src/*.py
 ```
 
 ## 目录结构
@@ -470,6 +630,13 @@ src/
 │   │   └── cli/
 │   └── commands/           # 命令处理
 ├── tools/                   # 工具系统
+├── push/                    # 推送决策 / 出站队列 / 反馈跟踪
+├── tentacle/                # 触手生命周期 / IPC / review
+├── skills/                  # SkillLoader / SkillSpawner / Packager
+├── cron/                    # 定时任务
+├── heartbeat/               # 心跳调度
+├── session/                 # transcript 存储
+├── builtin-tentacles/       # 内置 skill_tentacle
 └── mcp/                     # MCP 桥接
 ```
 

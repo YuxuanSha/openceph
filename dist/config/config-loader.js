@@ -87,6 +87,10 @@ function expandPaths(config) {
             ...config.skills,
             paths: config.skills.paths.map(expand),
         },
+        skillTentacle: {
+            ...config.skillTentacle,
+            searchPaths: config.skillTentacle.searchPaths.map(expand),
+        },
         tentacle: {
             ...config.tentacle,
             ipcSocketPath: expand(config.tentacle.ipcSocketPath),

@@ -27,6 +27,8 @@ export declare class SessionStoreManager {
     list(filter?: {
         activeWithinMinutes?: number;
     }): Promise<SessionEntry[]>;
+    appendAssistantMessage(targetSessionKey: string, content: string, metadata?: Record<string, unknown>): Promise<void>;
+    resolveSessionKeyByTranscriptPath(transcriptPath: string): Promise<string | undefined>;
     cleanup(cleanupConfig: {
         maxArchiveFilesPerKey: number;
         archiveTtlDays: number;

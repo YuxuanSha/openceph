@@ -44,7 +44,7 @@ export async function assembleSystemPrompt(
   )
 
   if (options.mode === "full") {
-    // Section 4: Skills
+    // Section 4: Skills (mark skill_tentacle type)
     sections.push(options.skillsSummary ? `# Skills\n${options.skillsSummary}` : "# Skills\nNo skills loaded in current session.")
 
     // Section 5: Tentacle Awareness

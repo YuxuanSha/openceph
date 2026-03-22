@@ -140,6 +140,7 @@ describe("CodeAgent Claude CLI runner", () => {
     expect(sessionLog).toContain("\"provider\":\"claude-code-cli\"")
     expect(sessionLog).toContain("\"modelId\":\"claude-sonnet-4-5-20250929\"")
     expect(sessionLog).toContain("\"persistent_session\":true")
+    expect(sessionLog).toContain("\"type\":\"complete\"")
   })
 
   it("kills the Claude CLI process when idle timeout is exceeded", async () => {
@@ -162,6 +163,69 @@ describe("CodeAgent Claude CLI runner", () => {
     await expect(agent.generate(requirement)).rejects.toBeInstanceOf(CodeAgentTimeoutError)
     const proc = fakeSpawn.mock.results[0]?.value as FakeClaudeProcess
     expect(proc.kill).toHaveBeenCalledWith("SIGTERM")
+  })
+
+  it("returns to normal polling when output resumes during warning phase", async () => {
+    const fakeSpawn = vi.fn((_: string, __: string[], options: { cwd?: string }) => {
+      const proc = new FakeClaudeProcess() as any
+
+      setTimeout(() => {
+        fs.writeFileSync(path.join(options.cwd!, "main.py"), "print('ok')\n", "utf-8")
+        proc.stdout.write(JSON.stringify({
+          type: "system",
+          subtype: "init",
+          session_id: "claude-session-warning",
+          model: "claude-sonnet-4-5-20250929",
+        }) + "\n")
+      }, 5)
+
+      setTimeout(() => {
+        proc.stdout.write(JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "still working" }],
+          },
+        }) + "\n")
+      }, 28)
+
+      setTimeout(() => {
+        proc.stdout.write(JSON.stringify({
+          type: "result",
+          subtype: "success",
+          result: "done after warning",
+          num_turns: 1,
+        }) + "\n")
+        proc.emit("close", 0)
+      }, 45)
+
+      return proc
+    })
+
+    const agent = new CodeAgent({} as any, {
+      tentacle: { codeGenPollIntervalMs: 10, codeGenIdleTimeoutMs: 25, codeGenTimeoutMs: 1 },
+      models: { named: {} },
+    } as any, { spawn: fakeSpawn })
+
+    const requirement: CodeAgentRequirement = {
+      tentacleId: "t_cli_warning_recovery",
+      purpose: "test warning recovery",
+      workflow: "resume output before timeout",
+      capabilities: [],
+      reportStrategy: "batch",
+      preferredRuntime: "python",
+      userContext: "",
+    }
+
+    const generated = await agent.generate(requirement)
+    expect(generated.diagnostics?.finalText).toBe("done after warning")
+
+    const proc = fakeSpawn.mock.results[0]?.value as FakeClaudeProcess
+    expect(proc.kill).not.toHaveBeenCalled()
+
+    const sessionLog = fs.readFileSync(generated.diagnostics!.sessionFile, "utf-8")
+    expect(sessionLog).toContain("\"phase\":\"entering_warning\"")
+    expect(sessionLog).toContain("\"phase\":\"warning_cleared\"")
   })
 
   it("rejects a second concurrent Claude Code run for the same tentacle", async () => {

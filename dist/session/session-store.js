@@ -93,6 +93,37 @@ export class SessionStoreManager {
         }
         return entries;
     }
+    async appendAssistantMessage(targetSessionKey, content, metadata) {
+        const entry = await this.getOrCreate(targetSessionKey);
+        const transcriptPath = this.getTranscriptPath(entry.sessionId);
+        await this.withLock(async () => {
+            const message = {
+                role: "assistant",
+                content,
+                timestamp: new Date().toISOString(),
+            };
+            if (metadata && Object.keys(metadata).length > 0) {
+                message.metadata = metadata;
+            }
+            await fs.appendFile(transcriptPath, `${JSON.stringify(message)}\n`, "utf-8");
+            const store = this.readStore();
+            const target = store[targetSessionKey];
+            if (target) {
+                target.updatedAt = new Date().toISOString();
+                this.writeStore(store);
+            }
+        });
+    }
+    async resolveSessionKeyByTranscriptPath(transcriptPath) {
+        const normalizedTarget = path.resolve(transcriptPath);
+        const store = this.readStore();
+        for (const entry of Object.values(store)) {
+            if (path.resolve(this.getTranscriptPath(entry.sessionId)) === normalizedTarget) {
+                return entry.sessionKey;
+            }
+        }
+        return undefined;
+    }
     async cleanup(cleanupConfig) {
         let deletedFiles = 0;
         let freedBytes = 0;

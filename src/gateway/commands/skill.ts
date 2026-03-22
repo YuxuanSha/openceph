@@ -1,5 +1,6 @@
 import type { CommandExecutor, CommandContext } from "./command-handler.js"
 import { SkillLoader } from "../../skills/skill-loader.js"
+import { resolveSkillSearchPaths } from "../../skills/search-paths.js"
 
 export const skillCommand: CommandExecutor = {
   async execute(args: string[], ctx: CommandContext): Promise<string> {
@@ -9,7 +10,7 @@ export const skillCommand: CommandExecutor = {
       return skills.length === 0 ? "No skills available." : `Available skills: ${skills.join(", ")}`
     }
 
-    const loader = new SkillLoader(ctx.config.skills.paths)
+    const loader = new SkillLoader(resolveSkillSearchPaths(ctx.config))
     await loader.loadAll()
     const { content } = await loader.readSkillContent(skillName)
     const input = args.slice(1).join(" ").trim()

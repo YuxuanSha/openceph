@@ -1,9 +1,12 @@
 import { execFile } from "child_process"
+import { existsSync } from "fs"
 import * as fs from "fs/promises"
 import * as net from "net"
 import * as os from "os"
 import * as path from "path"
 import type { GeneratedCode, ValidationError } from "./code-agent.js"
+import { SkillInspector } from "../skills/skill-inspector.js"
+import { systemLogger } from "../logger/index.js"
 
 export interface CheckResult {
   passed: boolean
@@ -14,6 +17,7 @@ export interface CheckResult {
 export interface ValidationResult {
   passed: boolean
   checks: {
+    structure?: CheckResult
     syntax: CheckResult
     contract: CheckResult
     security: CheckResult
@@ -22,6 +26,136 @@ export interface ValidationResult {
 }
 
 export class TentacleValidator {
+  private smokeTestTimeoutMs = 5000
+
+  setSmokeTestTimeoutMs(ms: number): void {
+    this.smokeTestTimeoutMs = ms
+  }
+
+  /**
+   * M4: Validate a skill_tentacle directory on disk.
+   * Runs structure + syntax + contract + security + smoke checks.
+   */
+  async validateSkillTentacle(target: string): Promise<ValidationResult> {
+    // Read files from disk into GeneratedCode format
+    const files = await readFilesFromDir(target)
+    const runtime = inferRuntimeFromFiles(files)
+
+    // Detect entry command and setup commands from SKILL.md frontmatter
+    const entryCommand = inferEntryCommandFromFiles(files, runtime, target)
+    const setupCommands = inferSetupCommandsFromFiles(files)
+
+    const code: GeneratedCode = {
+      runtime,
+      files,
+      entryCommand,
+      setupCommands,
+      description: "skill_tentacle validation",
+    }
+
+    // Structure check uses semantic frontmatter parsing via SkillInspector
+    const structure = await this.structureCheck(target)
+
+    const [syntax, contract, security] = await Promise.all([
+      this.syntaxCheck(code),
+      this.contractCheck(code),
+      this.securityCheck(code),
+    ])
+
+    // Smoke test only runs if prior checks pass (and entry command is known)
+    let smoke: CheckResult
+    if (structure.passed && syntax.passed && contract.passed && security.passed && entryCommand) {
+      smoke = await this.smokeTestOnDisk(target, entryCommand, setupCommands, this.smokeTestTimeoutMs)
+    } else {
+      smoke = { passed: true, errors: [], warnings: ["Smoke test skipped (prior checks failed or no entry command)"] }
+    }
+
+    const passed = structure.passed && syntax.passed && contract.passed && security.passed && smoke.passed
+
+    systemLogger.info("skill_tentacle_validation", {
+      target,
+      passed,
+      checks: {
+        structure: structure.passed,
+        syntax: syntax.passed,
+        contract: contract.passed,
+        security: security.passed,
+        smoke: smoke.passed,
+      },
+    })
+
+    return {
+      passed,
+      checks: { structure, syntax, contract, security, smoke },
+    }
+  }
+
+  /**
+   * M4: Structure completeness check for skill_tentacle directories.
+   */
+  async structureCheck(dir: string): Promise<CheckResult> {
+    const errors: ValidationError[] = []
+    const warnings: string[] = []
+
+    // Required files
+    const required = ["SKILL.md", "README.md", "prompt/SYSTEM.md"]
+    for (const f of required) {
+      const fullPath = path.join(dir, f)
+      try {
+        await fs.access(fullPath)
+      } catch {
+        errors.push({ check: "structure" as any, message: `必须文件缺失：${f}` })
+      }
+    }
+
+    // src/ directory must exist
+    try {
+      const srcStat = await fs.stat(path.join(dir, "src"))
+      if (!srcStat.isDirectory()) {
+        errors.push({ check: "structure" as any, message: "src/ 不是目录" })
+      }
+    } catch {
+      errors.push({ check: "structure" as any, message: "src/ 目录缺失" })
+    }
+
+    // SKILL.md frontmatter semantic check via SkillInspector (deep YAML parsing)
+    try {
+      if (!SkillInspector.isSkillTentacle(dir)) {
+        errors.push({
+          check: "structure" as any,
+          message: "SKILL.md frontmatter 缺少 metadata.openceph.tentacle.spawnable: true（或缺少 prompt/SYSTEM.md / src/ / README.md）",
+        })
+      }
+    } catch {
+      // SKILL.md missing already reported above
+    }
+
+    // README.md content check
+    try {
+      const readme = await fs.readFile(path.join(dir, "README.md"), "utf-8")
+      if (!readme.includes("环境变量") && !readme.includes("Environment") && !readme.includes("env")) {
+        warnings.push("README.md 缺少环境变量章节")
+      }
+      if (!readme.includes("部署") && !readme.includes("Deploy") && !readme.includes("Setup") && !readme.includes("Install")) {
+        warnings.push("README.md 缺少部署步骤章节")
+      }
+    } catch {
+      // README.md missing already reported above
+    }
+
+    // prompt/SYSTEM.md non-empty check
+    try {
+      const systemMd = await fs.readFile(path.join(dir, "prompt", "SYSTEM.md"), "utf-8")
+      if (systemMd.trim().length < 50) {
+        errors.push({ check: "structure" as any, message: "prompt/SYSTEM.md 内容过短（< 50 字符）" })
+      }
+    } catch {
+      // Already reported above
+    }
+
+    return { passed: errors.length === 0, errors, warnings }
+  }
+
   async validateAll(code: GeneratedCode): Promise<ValidationResult> {
     const [syntax, contract, security] = await Promise.all([
       this.syntaxCheck(code),
@@ -345,6 +479,118 @@ export class TentacleValidator {
       await fs.rm(dir, { recursive: true, force: true })
     }
   }
+
+  /**
+   * Smoke test that runs directly from an on-disk directory (no materialize).
+   * Used by validateSkillTentacle for deployed/generated directories.
+   */
+  private async smokeTestOnDisk(
+    dir: string,
+    entryCommand: string,
+    setupCommands: string[],
+    timeoutMs: number,
+  ): Promise<CheckResult> {
+    let socketPath: string | null = null
+    let server: net.Server | null = null
+    let registered = false
+
+    try {
+      // Run setup commands if any (e.g., pip install) — skip if venv already exists
+      for (const cmd of setupCommands) {
+        // Skip setup if it creates a venv that already exists
+        if (cmd.includes("venv") && existsSync(path.join(dir, "venv"))) continue
+        try {
+          await run("bash", ["-lc", cmd], dir, 60_000)
+        } catch (error) {
+          return {
+            passed: false,
+            errors: [{
+              check: "smoke",
+              message: `Setup command failed: ${cmd} — ${error instanceof Error ? error.message : String(error)}`,
+              suggestion: "Fix the setup command or dependencies",
+            }],
+            warnings: [],
+          }
+        }
+      }
+
+      // Create mock socket in a temp location
+      socketPath = path.join(os.tmpdir(), `openceph-smoke-${Date.now()}.sock`)
+      server = await createMockSocket(socketPath, (data) => {
+        try {
+          const msg = JSON.parse(data)
+          if (msg.type === "tentacle_register") registered = true
+        } catch {}
+      })
+
+      const env = {
+        ...process.env,
+        OPENCEPH_SOCKET_PATH: socketPath,
+        OPENCEPH_IPC_SOCKET: socketPath,
+        OPENCEPH_TENTACLE_ID: "smoke_test",
+        OPENCEPH_TRIGGER_MODE: "external",
+      }
+
+      const child = await import("child_process").then((cp) =>
+        cp.spawn("bash", ["-lc", entryCommand], { cwd: dir, env, stdio: "pipe" })
+      )
+
+      // Wait for registration within timeout
+      const startTime = Date.now()
+      while (!registered && Date.now() - startTime < timeoutMs) {
+        await new Promise((r) => setTimeout(r, 200))
+      }
+
+      // Send kill directive
+      if (server) {
+        const killMsg = JSON.stringify({
+          type: "directive",
+          sender: "brain",
+          receiver: "smoke_test",
+          payload: { action: "kill" },
+          timestamp: new Date().toISOString(),
+          message_id: "smoke-kill",
+        }) + "\n"
+        for (const conn of (server as any).__connections ?? []) {
+          try { conn.write(killMsg) } catch {}
+        }
+      }
+
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => { child.kill("SIGTERM"); resolve() }, 2000)
+        child.on("exit", () => { clearTimeout(timer); resolve() })
+      })
+
+      if (!registered) {
+        return {
+          passed: false,
+          errors: [{
+            check: "smoke",
+            message: `Tentacle did not send tentacle_register within ${timeoutMs}ms`,
+            suggestion: "Ensure the tentacle sends tentacle_register immediately after connecting",
+          }],
+          warnings: [],
+        }
+      }
+
+      return { passed: true, errors: [], warnings: [] }
+    } catch (error) {
+      return {
+        passed: false,
+        errors: [{
+          check: "smoke",
+          message: `Smoke test failed: ${error instanceof Error ? error.message : String(error)}`,
+          suggestion: "Ensure the tentacle can start and register",
+        }],
+        warnings: [],
+      }
+    } finally {
+      if (server) server.close()
+      if (socketPath) {
+        try { await fs.unlink(socketPath) } catch {}
+      }
+    }
+  }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -397,4 +643,81 @@ function createMockSocket(socketPath: string, onData: (data: string) => void): P
     server.on("error", reject)
     server.listen(socketPath, () => resolve(server))
   })
+}
+
+async function readFilesFromDir(dir: string): Promise<Array<{ path: string; content: string }>> {
+  const files: Array<{ path: string; content: string }> = []
+  const walk = async (d: string, prefix: string) => {
+    let entries
+    try {
+      entries = await fs.readdir(d, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const relPath = prefix ? `${prefix}/${entry.name}` : entry.name
+      if (entry.isDirectory()) {
+        if (["venv", "node_modules", "__pycache__", ".git", "data"].includes(entry.name)) continue
+        await walk(path.join(d, entry.name), relPath)
+      } else if (/\.(py|ts|js|go|sh|md|txt|json|yaml|yml|toml|env)$/.test(entry.name)) {
+        try {
+          const content = await fs.readFile(path.join(d, entry.name), "utf-8")
+          files.push({ path: relPath, content })
+        } catch {
+          // skip unreadable files
+        }
+      }
+    }
+  }
+  await walk(dir, "")
+  return files
+}
+
+function inferRuntimeFromFiles(files: Array<{ path: string }>): string {
+  if (files.some((f) => f.path.endsWith(".py"))) return "python"
+  if (files.some((f) => f.path.endsWith(".ts"))) return "typescript"
+  if (files.some((f) => f.path.endsWith(".go"))) return "go"
+  if (files.some((f) => f.path.endsWith(".sh"))) return "shell"
+  return "python"
+}
+
+function inferEntryCommandFromFiles(
+  files: Array<{ path: string; content: string }>,
+  runtime: string,
+  dir: string,
+): string {
+  // Try to get entry from SKILL.md frontmatter
+  const skillMd = files.find((f) => f.path === "SKILL.md")
+  if (skillMd) {
+    const entryMatch = skillMd.content.match(/^\s+entry:\s*(.+)/m)
+    const entry = entryMatch?.[1]?.trim()
+    if (entry) {
+      const hasVenv = existsSync(path.join(dir, "venv", "bin", "python"))
+      if (runtime === "python") return hasVenv ? `venv/bin/python ${entry}` : `python3 ${entry}`
+      if (runtime === "typescript") return `npx tsx ${entry}`
+      if (runtime === "go") return `go run ${entry}`
+      if (runtime === "shell") return `bash ${entry}`
+      return entry
+    }
+  }
+  // Fallback by runtime
+  const hasVenv = existsSync(path.join(dir, "venv", "bin", "python"))
+  if (runtime === "python") {
+    const mainPy = files.find((f) => f.path === "src/main.py")
+    return mainPy ? (hasVenv ? "venv/bin/python src/main.py" : "python3 src/main.py") : ""
+  }
+  if (runtime === "typescript") return "npx tsx src/index.ts"
+  return ""
+}
+
+function inferSetupCommandsFromFiles(files: Array<{ path: string; content: string }>): string[] {
+  const skillMd = files.find((f) => f.path === "SKILL.md")
+  if (!skillMd) return []
+  // Parse setup_commands list from SKILL.md frontmatter
+  const setupMatch = skillMd.content.match(/setup_commands:\s*\n((?:\s+-\s+.+\n?)+)/)
+  if (!setupMatch) return []
+  return setupMatch[1]
+    .split("\n")
+    .map((line) => line.trim().replace(/^-\s*/, "").trim())
+    .filter(Boolean)
 }

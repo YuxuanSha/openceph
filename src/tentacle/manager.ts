@@ -4,6 +4,7 @@ import * as fs from "fs/promises"
 import { existsSync } from "fs"
 import * as path from "path"
 import type { OpenCephConfig } from "../config/config-schema.js"
+import { buildTentacleModelEnv } from "../config/model-runtime.js"
 import { brainLogger, systemLogger, tentacleLog } from "../logger/index.js"
 import { updateRuntimeStatus } from "../logger/runtime-status-store.js"
 import type {
@@ -115,11 +116,13 @@ export class TentacleManager {
 
     const metadata = await this.readMetadata(tentacleId)
     const scheduleConfig = metadata.scheduleConfig ?? inferScheduleConfig(metadata.trigger)
+    const modelEnv = buildTentacleModelEnv(this.config)
     const child = spawn("bash", ["-lc", metadata.entryCommand], {
       cwd: metadata.cwd ?? this.getTentacleDir(tentacleId),
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
+        ...modelEnv,
         OPENCEPH_SOCKET_PATH: this.config.tentacle.ipcSocketPath,
         OPENCEPH_TENTACLE_ID: tentacleId,
         OPENCEPH_TRIGGER_MODE: scheduleConfig.primaryTrigger.type === "self-schedule" ? "self" : "external",

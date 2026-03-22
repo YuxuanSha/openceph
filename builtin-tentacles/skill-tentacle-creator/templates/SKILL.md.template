@@ -1,0 +1,11 @@
+---
+name: {{name}}
+description: {{purpose}}
+version: 1.0.0
+metadata:
+  openceph:
+    tentacle:
+      spawnable: true
+      runtime: python
+      entry: src/main.py
+---

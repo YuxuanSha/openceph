@@ -25,6 +25,10 @@ export declare const OpenCephConfigSchema: z.ZodObject<{
                 primary: z.ZodString;
                 fallbacks: z.ZodDefault<z.ZodArray<z.ZodString>>;
             }, z.core.$strip>;
+            models: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodObject<{
+                alias: z.ZodOptional<z.ZodString>;
+                params: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+            }, z.core.$strip>>>;
             userTimezone: z.ZodDefault<z.ZodString>;
             bootstrapMaxChars: z.ZodDefault<z.ZodNumber>;
             bootstrapTotalMaxChars: z.ZodDefault<z.ZodNumber>;
@@ -156,6 +160,19 @@ export declare const OpenCephConfigSchema: z.ZodObject<{
     skills: z.ZodDefault<z.ZodOptional<z.ZodObject<{
         paths: z.ZodDefault<z.ZodArray<z.ZodString>>;
     }, z.core.$strip>>>;
+    builtinTentacles: z.ZodDefault<z.ZodOptional<z.ZodObject<{
+        autoInstallOnInit: z.ZodDefault<z.ZodBoolean>;
+        autoUpgradeOnUpdate: z.ZodDefault<z.ZodBoolean>;
+        skipList: z.ZodDefault<z.ZodArray<z.ZodString>>;
+    }, z.core.$strip>>>;
+    skillTentacle: z.ZodDefault<z.ZodOptional<z.ZodObject<{
+        searchPaths: z.ZodDefault<z.ZodArray<z.ZodString>>;
+        packExclude: z.ZodDefault<z.ZodArray<z.ZodString>>;
+        validation: z.ZodDefault<z.ZodOptional<z.ZodObject<{
+            structureCheck: z.ZodDefault<z.ZodBoolean>;
+            smokeTestTimeoutMs: z.ZodDefault<z.ZodNumber>;
+        }, z.core.$strip>>>;
+    }, z.core.$strip>>>;
     tentacle: z.ZodDefault<z.ZodOptional<z.ZodObject<{
         maxActive: z.ZodDefault<z.ZodNumber>;
         ipcSocketPath: z.ZodDefault<z.ZodString>;
@@ -164,6 +181,50 @@ export declare const OpenCephConfigSchema: z.ZodObject<{
         codeGenPollIntervalMs: z.ZodDefault<z.ZodNumber>;
         codeGenIdleTimeoutMs: z.ZodDefault<z.ZodNumber>;
         crashRestartMaxAttempts: z.ZodDefault<z.ZodNumber>;
+        model: z.ZodOptional<z.ZodObject<{
+            primary: z.ZodString;
+            fallbacks: z.ZodDefault<z.ZodArray<z.ZodString>>;
+        }, z.core.$strip>>;
+        models: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodObject<{
+            alias: z.ZodOptional<z.ZodString>;
+            params: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+        }, z.core.$strip>>>;
+        providers: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodObject<{
+            baseUrl: z.ZodOptional<z.ZodString>;
+            apiKey: z.ZodOptional<z.ZodString>;
+            api: z.ZodOptional<z.ZodString>;
+            models: z.ZodOptional<z.ZodArray<z.ZodObject<{
+                id: z.ZodString;
+                name: z.ZodOptional<z.ZodString>;
+                reasoning: z.ZodOptional<z.ZodBoolean>;
+                input: z.ZodOptional<z.ZodArray<z.ZodString>>;
+                cost: z.ZodOptional<z.ZodObject<{
+                    input: z.ZodNumber;
+                    output: z.ZodNumber;
+                    cacheRead: z.ZodDefault<z.ZodNumber>;
+                    cacheWrite: z.ZodDefault<z.ZodNumber>;
+                }, z.core.$strip>>;
+                contextWindow: z.ZodOptional<z.ZodNumber>;
+                maxTokens: z.ZodOptional<z.ZodNumber>;
+            }, z.core.$strip>>>;
+        }, z.core.$strip>>>;
+        auth: z.ZodOptional<z.ZodObject<{
+            profiles: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodObject<{
+                mode: z.ZodEnum<{
+                    api_key: "api_key";
+                    oauth: "oauth";
+                }>;
+                apiKey: z.ZodOptional<z.ZodString>;
+                email: z.ZodOptional<z.ZodString>;
+            }, z.core.$strip>>>;
+            order: z.ZodDefault<z.ZodRecord<z.ZodString, z.ZodArray<z.ZodString>>>;
+            cooldown: z.ZodDefault<z.ZodString>;
+            cacheRetention: z.ZodDefault<z.ZodEnum<{
+                none: "none";
+                short: "short";
+                long: "long";
+            }>>;
+        }, z.core.$strip>>;
         confidenceThresholds: z.ZodDefault<z.ZodObject<{
             directReport: z.ZodDefault<z.ZodNumber>;
             consultation: z.ZodDefault<z.ZodNumber>;

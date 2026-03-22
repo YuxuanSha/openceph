@@ -105,4 +105,27 @@ describe("OutboundQueue", () => {
     expect(all).toHaveLength(1)
     expect(all[0].itemId).toBe("new")
   })
+
+  it("stores and retrieves deferred messages separately from approved pushes", async () => {
+    await queue.addApprovedItem(makeItem({ itemId: "push-1" }))
+    await queue.addDeferredMessage({
+      messageId: "deferred-1",
+      message: "digest later",
+      channel: "telegram",
+      senderId: "user-1",
+      timing: "morning_digest",
+      priority: "normal",
+      source: "consultation_session",
+      targetSessionKey: "agent:ceph:main",
+      tentacleId: "t_digest",
+    })
+
+    const pendingApproved = await queue.getPending()
+    const pendingDeferred = await queue.getPendingDeferred()
+
+    expect(pendingApproved).toHaveLength(1)
+    expect(pendingApproved[0].itemId).toBe("push-1")
+    expect(pendingDeferred).toHaveLength(1)
+    expect(pendingDeferred[0].messageId).toBe("deferred-1")
+  })
 })

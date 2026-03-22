@@ -69,7 +69,7 @@ send("consultation_request", {
 - `OPENCEPH_SOCKET_PATH` — Unix socket path (required)
 - `OPENCEPH_TENTACLE_ID` — Tentacle identifier (required)
 - `OPENCEPH_TRIGGER_MODE` — "self" or "external" (required)
-- `OPENROUTER_API_KEY` — LLM API key (if needed)
+- `OPENCEPH_LLM_API_KEY` / `OPENCEPH_LLM_BASE_URL` / `OPENCEPH_LLM_MODEL` — LLM runtime config (if needed)
 
 ## Setup Commands
 ```

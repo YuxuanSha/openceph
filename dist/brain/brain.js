@@ -3,7 +3,7 @@ import { resolveRunnableModel } from "../pi/model-resolver.js";
 import { SessionStoreManager } from "../session/session-store.js";
 import { ToolRegistry } from "../tools/index.js";
 import { createMemoryTools } from "../tools/memory-tools.js";
-import { createUserTools } from "../tools/user-tools.js";
+import { createUserTools, executeSendToUser } from "../tools/user-tools.js";
 import { createSkillTools } from "../tools/skill-tools.js";
 import { createWebTools } from "../tools/web-tools.js";
 import { createSessionTools } from "../tools/session-tools.js";
@@ -13,7 +13,7 @@ import { createCodeTools } from "../tools/code-tools.js";
 import { createCronTools } from "../tools/cron-tools.js";
 import { assembleSystemPrompt } from "./system-prompt.js";
 import { isNewWorkspace } from "./context-assembler.js";
-import { brainLogger, costLogger, writeCacheTrace } from "../logger/index.js";
+import { brainLogger, costLogger, gatewayLogger, writeCacheTrace } from "../logger/index.js";
 import { updateRuntimeStatus } from "../logger/runtime-status-store.js";
 import { IpcServer } from "../tentacle/ipc-server.js";
 import { TentacleRegistry } from "../tentacle/registry.js";
@@ -22,6 +22,7 @@ import { TentacleManager } from "../tentacle/manager.js";
 import { LoopDetector } from "./loop-detection.js";
 import { SkillLoader } from "../skills/skill-loader.js";
 import { SkillSpawner } from "../skills/skill-spawner.js";
+import { resolveSkillSearchPaths } from "../skills/search-paths.js";
 import { CodeAgent } from "../code-agent/code-agent.js";
 import * as os from "os";
 import * as fs from "fs/promises";
@@ -82,7 +83,8 @@ export class Brain {
         this.tentacleRegistry = new TentacleRegistry(options.piCtx.workspaceDir);
         this.pendingReports = new PendingReportsQueue(path.join(os.homedir(), ".openceph", "state", "pending-reports.json"));
         this.tentacleManager = new TentacleManager(options.config, this.ipcServer, this.tentacleRegistry, this.pendingReports);
-        this.skillLoader = new SkillLoader(options.config.skills.paths);
+        const skillSearchPaths = resolveSkillSearchPaths(options.config);
+        this.skillLoader = new SkillLoader(skillSearchPaths);
         this.modelFailover = new ModelFailover(options.config);
         this.consultationStore = new ConsultationSessionStore(path.join(os.homedir(), ".openceph", "state", "consultations.json"));
         // Initialize push system
@@ -101,9 +103,41 @@ export class Brain {
         }
         // Register user tools
         for (const entry of createUserTools({
+            config: options.config,
+            sessionStore: this.sessionStore,
             deliverToUser: options.deliverToUser,
             lastActiveChannel: () => this.lastActiveChannel,
             lastActiveSenderId: () => this.lastActiveSenderId,
+            resolveSessionKey: async (sessionFile) => {
+                return await this.sessionStore.resolveSessionKeyByTranscriptPath(sessionFile)
+                    ?? await new SessionStoreManager("cron").resolveSessionKeyByTranscriptPath(sessionFile);
+            },
+            onConsultationPush: async (payload) => {
+                const syntheticItem = {
+                    itemId: payload.pushId,
+                    tentacleId: payload.tentacleId ?? "unknown",
+                    content: payload.message,
+                    originalItems: [],
+                    priority: payload.priority === "urgent" ? "urgent" : "normal",
+                    timelinessHint: payload.timing === "immediate" ? "immediate" : "today",
+                    needsUserAction: false,
+                    approvedAt: new Date().toISOString(),
+                    status: payload.delivered ? "sent" : "pending",
+                    sentAt: payload.delivered ? new Date().toISOString() : undefined,
+                };
+                if (payload.delivered) {
+                    this.rememberDeliveredPush(payload.channel, payload.senderId, [syntheticItem], payload.pushId);
+                }
+                const consultationSessionId = payload.sessionKey.startsWith("consultation:")
+                    ? payload.sessionKey.slice("consultation:".length)
+                    : undefined;
+                if (consultationSessionId) {
+                    this.pushMessageToConsultationSession.set(payload.pushId, consultationSessionId);
+                    await this.consultationStore.update(consultationSessionId, {
+                        recentPushMessageId: payload.pushId,
+                    });
+                }
+            },
         })) {
             this.toolRegistry.register(entry);
         }
@@ -113,7 +147,7 @@ export class Brain {
         for (const entry of createHeartbeatTools(options.piCtx.workspaceDir)) {
             this.toolRegistry.register(entry);
         }
-        for (const entry of createSkillTools(options.config.skills.paths)) {
+        for (const entry of createSkillTools(skillSearchPaths)) {
             this.toolRegistry.register(entry);
         }
         // Register built-in web tools (search + fetch, no API key needed)
@@ -148,7 +182,8 @@ export class Brain {
         await this.skillLoader.loadAll();
         if (!this.skillSpawner) {
             const codeAgent = new CodeAgent(this.piCtx, this.config);
-            this.skillSpawner = new SkillSpawner(this.config, this.skillLoader, this.tentacleManager, codeAgent);
+            const credentialStore = new (await import("../config/credential-store.js")).CredentialStore(path.join(os.homedir(), ".openceph", "credentials"));
+            this.skillSpawner = new SkillSpawner(this.config, this.skillLoader, this.tentacleManager, codeAgent, credentialStore);
             // Initialize lifecycle and review engines
             this.lifecycleManager = new TentacleLifecycleManager(this.tentacleManager, this.cronScheduler, codeAgent, this.tentacleRegistry, this.healthCalculator);
             this.reviewEngine = new TentacleReviewEngine(this.tentacleManager, this.healthCalculator, this.memoryManager, this.outboundQueue);
@@ -243,6 +278,10 @@ export class Brain {
         });
         // After handling user message, check if there's pending push content
         try {
+            await this.deliverDeferredMessages("user_message", {
+                channel: input.channel,
+                senderId: input.senderId,
+            });
             const pushDecision = await this.pushEngine.evaluate({
                 type: "user_message",
                 lastInteractionAt: new Date().toISOString(),
@@ -636,6 +675,10 @@ export class Brain {
     }
     async runDailyReviewAutomation() {
         const sections = [];
+        const deferred = await this.deliverDeferredMessages("best_time_window");
+        if (deferred.deliveredCount > 0) {
+            sections.push(`Deferred user messages delivered: ${deferred.deliveredCount}`);
+        }
         if (this.reviewEngine && this.lifecycleManager) {
             const actions = await this.reviewEngine.review();
             const applied = [];
@@ -662,8 +705,16 @@ export class Brain {
         return sections.length > 0 ? sections.join("\n\n") : "HEARTBEAT_OK";
     }
     async runMorningDigestFallback() {
+        const sections = [];
+        const deferred = await this.deliverDeferredMessages("morning_digest");
+        if (deferred.deliveredCount > 0) {
+            sections.push(`Delivered ${deferred.deliveredCount} deferred message(s).`);
+        }
         const pushText = await this.evaluatePush({ type: "daily_review" });
-        return pushText ?? "HEARTBEAT_OK";
+        if (pushText) {
+            sections.push(pushText);
+        }
+        return sections.length > 0 ? sections.join("\n\n") : "HEARTBEAT_OK";
     }
     setThinkingLevel(level) {
         this.currentThinkingLevel = normalizeThinkingLevel(level);
@@ -782,7 +833,7 @@ export class Brain {
             mode: payload.mode,
             queued_push_count: queuedItems.length,
         });
-        if (queuedItems.some((item) => item.priority === "urgent" || item.timelinessHint === "immediate")) {
+        if (queuedItems.length > 0) {
             await this.deliverPushNow(queuedItems, session.sessionId);
         }
         return {
@@ -938,34 +989,191 @@ export class Brain {
         });
     }
     async deliverPushNow(items, sessionId) {
-        if (!this.deliverToUser || items.length === 0)
+        if (items.length === 0)
             return;
-        const text = items.length === 1 ? items[0].content : items.map((item, index) => `${index + 1}. ${item.content}`).join("\n");
-        const messageId = `push:${Date.now()}`;
-        await this.deliverToUser({
-            channel: this.lastActiveChannel,
-            senderId: this.lastActiveSenderId,
+        const text = items.length === 1
+            ? items[0].content
+            : items.map((item, index) => `${index + 1}. ${item.content}`).join("\n");
+        const sourceTentacles = Array.from(new Set(items.map((item) => item.tentacleId)));
+        const priority = items.some((item) => item.priority === "urgent") ? "urgent" : "normal";
+        const result = await executeSendToUser({
+            message: text,
+            timing: "immediate",
+            priority,
+            channel: "last_active",
+            source_tentacles: sourceTentacles,
         }, {
+            currentSessionKey: sessionId ? `consultation:${sessionId}` : "consultation:auto",
+            mainSessionKey: `agent:ceph:${this.config.session.mainKey}`,
+            deliverToUser: this.deliverToUser,
+            lastActiveChannel: () => this.lastActiveChannel,
+            lastActiveSenderId: () => this.lastActiveSenderId,
+            sessionStore: this.sessionStore,
+            onConsultationPush: async (payload) => {
+                this.rememberDeliveredPush(payload.channel, payload.senderId, items, payload.pushId);
+                if (sessionId) {
+                    this.pushMessageToConsultationSession.set(payload.pushId, sessionId);
+                    await this.consultationStore.update(sessionId, {
+                        recentPushMessageId: payload.pushId,
+                    });
+                }
+            },
+        });
+        const delivered = result.details?.delivered !== false;
+        if (delivered) {
+            await this.outboundQueue.markSentBatch(items.map((item) => item.itemId));
+        }
+    }
+    async deliverDeferredMessages(mode, targetOverride) {
+        if (!this.deliverToUser)
+            return { deliveredCount: 0 };
+        const pending = await this.outboundQueue.getPendingDeferred();
+        if (pending.length === 0)
+            return { deliveredCount: 0 };
+        const now = new Date();
+        const due = pending.filter((item) => this.isDeferredDue(item, mode, now));
+        if (due.length === 0)
+            return { deliveredCount: 0 };
+        const bestTimeItems = due.filter((item) => item.timing === "best_time");
+        const morningDigestItems = due.filter((item) => item.timing === "morning_digest");
+        let deliveredCount = 0;
+        for (const item of bestTimeItems) {
+            const target = {
+                channel: targetOverride?.channel ?? item.channel ?? this.lastActiveChannel,
+                senderId: targetOverride?.senderId ?? item.senderId ?? this.lastActiveSenderId,
+            };
+            await this.deliverDeferredItem(item, target);
+            deliveredCount++;
+        }
+        const digestGroups = new Map();
+        for (const item of morningDigestItems) {
+            const channel = targetOverride?.channel ?? item.channel ?? this.lastActiveChannel;
+            const senderId = targetOverride?.senderId ?? item.senderId ?? this.lastActiveSenderId;
+            const key = `${channel}:${senderId}`;
+            const list = digestGroups.get(key) ?? [];
+            list.push({ ...item, channel, senderId });
+            digestGroups.set(key, list);
+        }
+        for (const [key, items] of digestGroups) {
+            const [channel, senderId] = key.split(":");
+            await this.deliverDeferredDigest(items, { channel, senderId });
+            deliveredCount += items.length;
+        }
+        return { deliveredCount };
+    }
+    isDeferredDue(item, mode, now) {
+        if (item.status !== "pending")
+            return false;
+        if (item.timing === "best_time") {
+            if (mode === "user_message")
+                return true;
+            if (mode === "best_time_window")
+                return this.isWithinPreferredWindow(now);
+            if (mode === "morning_digest") {
+                return now.getTime() - new Date(item.createdAt).getTime() >= 24 * 60 * 60 * 1000;
+            }
+        }
+        if (item.timing === "morning_digest") {
+            return mode === "morning_digest";
+        }
+        return false;
+    }
+    isWithinPreferredWindow(now) {
+        const [startHour, startMinute] = this.config.push.preferredWindowStart.split(":").map((v) => Number(v));
+        const [endHour, endMinute] = this.config.push.preferredWindowEnd.split(":").map((v) => Number(v));
+        const current = now.getHours() * 60 + now.getMinutes();
+        const start = (Number.isFinite(startHour) ? startHour : 9) * 60 + (Number.isFinite(startMinute) ? startMinute : 0);
+        const end = (Number.isFinite(endHour) ? endHour : 10) * 60 + (Number.isFinite(endMinute) ? endMinute : 0);
+        return current >= start && current <= end;
+    }
+    async deliverDeferredItem(item, target) {
+        await this.deliverToUser(target, {
+            text: item.message,
+            timing: "immediate",
+            priority: item.priority,
+            messageId: item.messageId,
+        });
+        if (item.source === "consultation_session" && item.targetSessionKey) {
+            await this.sessionStore.appendAssistantMessage(item.targetSessionKey, item.message, {
+                source: "tentacle_push",
+                tentacleId: item.tentacleId ?? "unknown",
+                pushId: item.messageId,
+                consultationSessionId: item.sourceSessionKey ?? "consultation:queued",
+                pushedAt: new Date().toISOString(),
+            });
+            brainLogger.info("push_to_main_session", {
+                session_id: item.sourceSessionKey ?? "consultation:queued",
+                target_session: item.targetSessionKey,
+                push_id: item.messageId,
+                tentacle_id: item.tentacleId,
+                channel: target.channel,
+                timing: item.timing,
+                priority: item.priority,
+            });
+        }
+        gatewayLogger.info("push_delivered_from_consultation", {
+            push_id: item.messageId,
+            tentacle_id: item.tentacleId,
+            channel: target.channel,
+            delivery_mode: "deferred_single",
+        });
+        await this.outboundQueue.markDeferredSent([item.messageId]);
+    }
+    async deliverDeferredDigest(items, target) {
+        if (items.length === 0)
+            return;
+        const text = [
+            `☀️ 今日简报（${new Date().toISOString().slice(0, 10)}）`,
+            "",
+            ...items.map((item, index) => `${index + 1}. ${item.message}`),
+        ].join("\n\n");
+        const messageId = `digest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await this.deliverToUser(target, {
             text,
             timing: "immediate",
             priority: items.some((item) => item.priority === "urgent") ? "urgent" : "normal",
             messageId,
         });
-        await this.outboundQueue.markSentBatch(items.map((item) => item.itemId));
-        this.rememberDeliveredPush(this.lastActiveChannel, this.lastActiveSenderId, items, messageId);
-        const recent = this.recentPushContext.get(`${this.lastActiveChannel}:${this.lastActiveSenderId}`);
-        if (recent && sessionId) {
-            this.pushMessageToConsultationSession.set(recent.messageId, sessionId);
-            await this.consultationStore.update(sessionId, {
-                recentPushMessageId: recent.messageId,
+        const consultationItems = items.filter((item) => item.source === "consultation_session" && item.targetSessionKey);
+        if (consultationItems.length > 0) {
+            await this.sessionStore.appendAssistantMessage(consultationItems[0].targetSessionKey, text, {
+                source: "tentacle_push",
+                pushId: messageId,
+                consultationSessionId: consultationItems.map((item) => item.sourceSessionKey ?? "consultation:queued").join(","),
+                sourceTentacles: Array.from(new Set(consultationItems.map((item) => item.tentacleId).filter(Boolean))),
+                pushedAt: new Date().toISOString(),
+            });
+            brainLogger.info("push_to_main_session", {
+                session_id: "consultation:digest",
+                target_session: consultationItems[0].targetSessionKey,
+                push_id: messageId,
+                tentacle_ids: Array.from(new Set(consultationItems.map((item) => item.tentacleId).filter(Boolean))),
+                channel: target.channel,
+                timing: "morning_digest",
+                priority: items.some((item) => item.priority === "urgent") ? "urgent" : "normal",
             });
         }
+        gatewayLogger.info("push_delivered_from_consultation", {
+            push_id: messageId,
+            tentacle_ids: Array.from(new Set(items.map((item) => item.tentacleId).filter(Boolean))),
+            channel: target.channel,
+            delivery_mode: "morning_digest",
+        });
+        await this.outboundQueue.markDeferredSent(items.map((item) => item.messageId));
     }
     async loadSkillsSummary() {
-        const skills = await new SkillLoader(this.config.skills.paths).loadAll();
+        const skills = await new SkillLoader(resolveSkillSearchPaths(this.config)).loadAll();
         if (skills.length === 0)
             return undefined;
-        return skills.map((skill) => `${skill.name} — ${skill.description || "No description"}${skill.spawnable ? " [spawnable]" : ""}`).join("\n");
+        return skills.map((skill) => {
+            const tags = [];
+            if (skill.isSkillTentacle)
+                tags.push("skill_tentacle");
+            else if (skill.spawnable)
+                tags.push("spawnable");
+            const tagStr = tags.length > 0 ? ` [${tags.join(", ")}]` : "";
+            return `${skill.name} — ${skill.description || "No description"}${tagStr}`;
+        }).join("\n");
     }
     async buildSystemPrompt(options) {
         const newWs = await isNewWorkspace(this.piCtx.workspaceDir);

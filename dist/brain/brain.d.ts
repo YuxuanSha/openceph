@@ -150,6 +150,11 @@ export declare class Brain {
     private processConsultationUserReply;
     private upsertConsultationSession;
     private deliverPushNow;
+    private deliverDeferredMessages;
+    private isDeferredDue;
+    private isWithinPreferredWindow;
+    private deliverDeferredItem;
+    private deliverDeferredDigest;
     private loadSkillsSummary;
     private buildSystemPrompt;
 }

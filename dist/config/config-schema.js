@@ -25,6 +25,10 @@ const NamedModelConfigSchema = z.object({
         fallbacks: z.array(z.string()).default([]),
     }),
 });
+const AgentModelSettingsSchema = z.object({
+    alias: z.string().optional(),
+    params: z.record(z.string(), z.unknown()).default({}),
+});
 const AuthProfileSchema = z.object({
     mode: z.enum(["api_key", "oauth"]),
     apiKey: z.string().optional(),
@@ -99,6 +103,11 @@ const SkillsConfigSchema = z.object({
         "~/.openceph/skills",
     ]),
 });
+const BuiltinTentaclesConfigSchema = z.object({
+    autoInstallOnInit: z.boolean().default(true),
+    autoUpgradeOnUpdate: z.boolean().default(true),
+    skipList: z.array(z.string()).default([]),
+});
 const TentacleReviewSchema = z.object({
     weakenThreshold: z.number().default(0.2),
     killThreshold: z.number().default(0.1),
@@ -118,6 +127,18 @@ const TentacleConfigSchema = z.object({
     codeGenPollIntervalMs: z.number().default(20_000),
     codeGenIdleTimeoutMs: z.number().default(60_000),
     crashRestartMaxAttempts: z.number().default(3),
+    model: z.object({
+        primary: z.string(),
+        fallbacks: z.array(z.string()).default([]),
+    }).optional(),
+    models: z.record(z.string(), AgentModelSettingsSchema).default({}),
+    providers: z.record(z.string(), ProviderSchema).default({}),
+    auth: z.object({
+        profiles: z.record(z.string(), AuthProfileSchema).default({}),
+        order: z.record(z.string(), z.array(z.string())).default({}),
+        cooldown: z.string().default("5m"),
+        cacheRetention: z.enum(["short", "long", "none"]).default("long"),
+    }).optional(),
     confidenceThresholds: z.object({
         directReport: z.number().default(0.8),
         consultation: z.number().default(0.4),
@@ -196,6 +217,7 @@ export const OpenCephConfigSchema = z.object({
                 primary: z.string(),
                 fallbacks: z.array(z.string()).default([]),
             }),
+            models: z.record(z.string(), AgentModelSettingsSchema).default({}),
             userTimezone: z.string().default("UTC"),
             bootstrapMaxChars: z.number().default(20000),
             bootstrapTotalMaxChars: z.number().default(150000),
@@ -246,6 +268,35 @@ export const OpenCephConfigSchema = z.object({
     skills: SkillsConfigSchema.optional().default({
         paths: ["~/.openceph/workspace/skills", "~/.openceph/skills"],
     }),
+    builtinTentacles: BuiltinTentaclesConfigSchema.optional().default({
+        autoInstallOnInit: true,
+        autoUpgradeOnUpdate: true,
+        skipList: [],
+    }),
+    skillTentacle: z.object({
+        searchPaths: z.array(z.string()).default(["~/.openceph/workspace/skills", "~/.openceph/skills"]),
+        packExclude: z.array(z.string()).default([
+            "venv/", "node_modules/", ".git/", "data/", "*.db", ".env",
+            "__pycache__/", "*.pyc", "tentacle.json", "tentacle.log",
+        ]),
+        validation: z.object({
+            structureCheck: z.boolean().default(true),
+            smokeTestTimeoutMs: z.number().default(5000),
+        }).optional().default({
+            structureCheck: true,
+            smokeTestTimeoutMs: 5000,
+        }),
+    }).optional().default({
+        searchPaths: ["~/.openceph/workspace/skills", "~/.openceph/skills"],
+        packExclude: [
+            "venv/", "node_modules/", ".git/", "data/", "*.db", ".env",
+            "__pycache__/", "*.pyc", "tentacle.json", "tentacle.log",
+        ],
+        validation: {
+            structureCheck: true,
+            smokeTestTimeoutMs: 5000,
+        },
+    }),
     tentacle: TentacleConfigSchema.optional().default({
         maxActive: 20,
         ipcSocketPath: "~/.openceph/openceph.sock",
@@ -254,6 +305,8 @@ export const OpenCephConfigSchema = z.object({
         codeGenPollIntervalMs: 20_000,
         codeGenIdleTimeoutMs: 60_000,
         crashRestartMaxAttempts: 3,
+        models: {},
+        providers: {},
         confidenceThresholds: {
             directReport: 0.8,
             consultation: 0.4,

@@ -5,6 +5,7 @@ import * as os from "os"
 import * as path from "path"
 import { fileURLToPath } from "url"
 import type { OpenCephConfig } from "../config/config-schema.js"
+import { buildTentacleModelEnv } from "../config/model-runtime.js"
 import { brainLogger, codeAgentLogger } from "../logger/index.js"
 import type { PiContext } from "../pi/pi-context.js"
 import { detectRuntimes } from "../tentacle/runtime-detector.js"
@@ -90,8 +91,6 @@ interface RunWithPollingOptions {
   sessionFile: string
   prompt: string
   workDir: string
-  pollIntervalMs: number
-  idleTimeoutMs: number
 }
 
 interface RunWithPollingResult extends CodeAgentSessionArtifact {}
@@ -149,13 +148,15 @@ export class CodeAgent {
   ) {}
 
   async generate(requirement: CodeAgentRequirement): Promise<GeneratedCode> {
-    const runtime = await this.chooseRuntime(requirement.preferredRuntime)
-    const prompt = await this.assemblePrompt({
-      mode: "generate",
-      runtime,
-      requirement,
+    return this.withExclusiveGeneratedRun(requirement.tentacleId, "generate", async (sessionFile) => {
+      const runtime = await this.chooseRuntime(requirement.preferredRuntime)
+      const prompt = await this.assemblePrompt({
+        mode: "generate",
+        runtime,
+        requirement,
+      })
+      return this.runGeneratedCode(prompt, requirement, runtime, "generate", sessionFile)
     })
-    return this.runGeneratedCode(prompt, requirement, runtime, "generate")
   }
 
   async fix(
@@ -163,15 +164,185 @@ export class CodeAgent {
     errors: ValidationError[],
     requirement: CodeAgentRequirement,
   ): Promise<GeneratedCode> {
-    const runtime = previousCode.runtime
-    const prompt = await this.assemblePrompt({
-      mode: "fix",
-      runtime,
-      requirement,
-      previousCode,
-      errors,
+    return this.withExclusiveGeneratedRun(requirement.tentacleId, "fix", async (sessionFile) => {
+      const runtime = previousCode.runtime
+      const prompt = await this.assemblePrompt({
+        mode: "fix",
+        runtime,
+        requirement,
+        previousCode,
+        errors,
+      })
+      return this.runGeneratedCode(prompt, requirement, runtime, "fix", sessionFile)
     })
-    return this.runGeneratedCode(prompt, requirement, runtime, "fix")
+  }
+
+  // ── M4: Scene 1 — Deploy existing skill_tentacle (minimal prompt) ──
+
+  async deployExisting(tentacleDir: string): Promise<void> {
+    const prompt = `You are deploying a pre-built tentacle agent for OpenCeph.
+
+Working directory: ${tentacleDir}
+
+Instructions:
+1. Read README.md in this directory — it contains all deployment steps
+2. Follow the deployment steps exactly as described
+3. If you encounter environment issues (wrong Python version, missing system packages,
+   pip install failures), fix them and continue
+4. Do NOT modify files in src/ or prompt/ directories
+5. After setup, optionally run the --dry-run command if README.md describes one
+6. Report success or failure with details
+
+The tentacle implements the OpenCeph IPC contract and will be
+managed by OpenCeph's TentacleManager after deployment.`
+
+    if (shouldUseEmergencyFallback()) {
+      return // skip in test mode
+    }
+
+    const sessionFile = await this.prepareSessionFile("deploy", "generate")
+    this.acquireRun("deploy-" + path.basename(tentacleDir), sessionFile)
+
+    try {
+      await this.runWithPolling({
+        tentacleId: "deploy-" + path.basename(tentacleDir),
+        sessionFile,
+        prompt,
+        workDir: tentacleDir,
+      })
+    } finally {
+      this.releaseRun("deploy-" + path.basename(tentacleDir), sessionFile)
+    }
+  }
+
+  // ── M4: Scene 2 — Generate complete skill_tentacle from scratch ──
+
+  async generateSkillTentacle(req: Omit<CodeAgentRequirement, "skillContext">): Promise<void> {
+    const spec = await readPrompt("skill-tentacle-spec.md").catch(() => "")
+    const contractSpec = await readPrompt("contract-spec.md").catch(() => "")
+    const ipcTemplate = await readPrompt("ipc-client-template.py").catch(() => "")
+    const langTemplate = await readPrompt(runtimePromptFile(req.preferredRuntime === "auto" ? "python" : req.preferredRuntime)).catch(() => "")
+
+    const prompt = `You are a skill_tentacle generator for OpenCeph.
+A skill_tentacle is a complete, independently running Agent system —
+not a script. Generate a fully functional, production-ready tentacle package.
+
+## skill_tentacle Package Specification
+${spec}
+
+## IPC Contract Specification
+${contractSpec}
+
+## Standard IPC Client Template (reuse directly, do not rewrite)
+\`\`\`python
+${ipcTemplate}
+\`\`\`
+
+## Generation Requirements
+Purpose: ${req.purpose}
+Workflow: ${req.workflow}
+Capabilities: ${req.capabilities?.join(", ") ?? "auto-determine"}
+Report Strategy: ${req.reportStrategy ?? "积攒有价值信息后批量上报大脑"}
+Runtime: ${req.preferredRuntime}
+Infrastructure: ${JSON.stringify(req.infrastructure ?? {})}
+External APIs: ${req.externalApis?.join(", ") ?? "none"}
+
+## User Context
+${req.userContext}
+
+## Runtime Template
+${langTemplate}
+
+## Output Requirements
+Generate the following complete file tree in the working directory.
+All files must be complete, functional, and ready to deploy:
+
+1. SKILL.md — with metadata.openceph.tentacle frontmatter
+2. README.md — deployment guide for Claude Code (follow the README spec)
+3. prompt/SYSTEM.md — tentacle's system prompt (with {PLACEHOLDER} variables)
+4. src/main.py — main process implementing IPC three contracts
+5. src/ipc_client.py — copy the standard IPC client template above
+6. src/requirements.txt — Python dependencies
+7. Other necessary business code files
+
+After generating all files, verify syntax with:
+  python3 -c "compile(open('src/main.py').read(), 'src/main.py', 'exec')"
+`
+
+    if (shouldUseEmergencyFallback()) {
+      // In test mode, generate minimal files
+      const workDir = path.join(os.homedir(), ".openceph", "tentacles", req.tentacleId)
+      await fs.mkdir(path.join(workDir, "prompt"), { recursive: true })
+      await fs.mkdir(path.join(workDir, "src"), { recursive: true })
+      await fs.writeFile(path.join(workDir, "SKILL.md"), `---\nname: ${req.tentacleId}\ndescription: ${req.purpose}\nversion: 1.0.0\nmetadata:\n  openceph:\n    tentacle:\n      spawnable: true\n      runtime: python\n      entry: src/main.py\n      default_trigger: every 30 minutes\n---\n`)
+      await fs.writeFile(path.join(workDir, "README.md"), `# ${req.tentacleId}\n\n## 环境变量\n\n## 部署步骤\n\n## 启动命令\npython3 src/main.py\n`)
+      await fs.writeFile(path.join(workDir, "prompt", "SYSTEM.md"), `# You are ${req.tentacleId}, a tentacle for {USER_NAME}.\n\n## Mission\n${req.purpose}\n\n## Report Strategy\n${req.reportStrategy ?? "Batch report"}\n`)
+      await fs.writeFile(path.join(workDir, "src", "main.py"), `import os\nimport sys\nSOCKET_PATH = os.environ.get("OPENCEPH_SOCKET_PATH", "")\nTENTACLE_ID = os.environ.get("OPENCEPH_TENTACLE_ID", "${req.tentacleId}")\nTRIGGER_MODE = os.environ.get("OPENCEPH_TRIGGER_MODE", "self")\nprint("Emergency fallback skill_tentacle")\n`)
+      await fs.writeFile(path.join(workDir, "src", "requirements.txt"), "requests==2.31.0\npython-dotenv==1.0.0\n")
+      return
+    }
+
+    const workDir = path.join(os.homedir(), ".openceph", "tentacles", req.tentacleId)
+    await fs.mkdir(workDir, { recursive: true })
+
+    const sessionFile = await this.prepareSessionFile(req.tentacleId, "generate")
+    this.acquireRun(req.tentacleId, sessionFile)
+
+    try {
+      brainLogger.info("tentacle_creator_generate", {
+        tentacle_id: req.tentacleId,
+        purpose: req.purpose,
+      })
+      await this.runWithPolling({
+        tentacleId: req.tentacleId,
+        sessionFile,
+        prompt,
+        workDir,
+      })
+    } finally {
+      this.releaseRun(req.tentacleId, sessionFile)
+    }
+  }
+
+  // ── M4: Scene 2 — Fix generated skill_tentacle ──
+
+  async fixSkillTentacle(
+    tentacleDir: string,
+    errors: Array<{ check?: string; message: string; file?: string; line?: number; suggestion?: string }>,
+  ): Promise<void> {
+    const fixPrompt = `The previously generated skill_tentacle has validation errors. Fix them.
+
+## Errors Found
+${errors.map((e) =>
+  `- [${e.check ?? "structure"}] ${e.message}${e.file ? ` (in ${e.file}:${e.line ?? ""})` : ""}${e.suggestion ? `\n  Suggestion: ${e.suggestion}` : ""}`
+).join("\n")}
+
+## Requirements
+- Fix the issues in-place (files are already in the working directory)
+- Ensure IPC three contracts are fully implemented
+- Ensure prompt/SYSTEM.md and README.md exist and are complete
+- After fixing, verify syntax again
+
+Do NOT introduce new issues while fixing existing ones.`
+
+    if (shouldUseEmergencyFallback()) {
+      return
+    }
+
+    const tentacleId = path.basename(tentacleDir)
+    const sessionFile = await this.prepareSessionFile(tentacleId, "fix")
+    this.acquireRun(tentacleId + "-fix", sessionFile)
+
+    try {
+      await this.runWithPolling({
+        tentacleId: tentacleId + "-fix",
+        sessionFile,
+        prompt: fixPrompt,
+        workDir: tentacleDir,
+      })
+    } finally {
+      this.releaseRun(tentacleId + "-fix", sessionFile)
+    }
   }
 
   async generatePatch(existingCode: string, patchRequirement: PatchRequirement): Promise<CodePatch> {
@@ -190,36 +361,38 @@ export class CodeAgent {
     tentacles: MergeTentacleInfo[],
     mergeRequirement: MergeRequirement,
   ): Promise<GeneratedCode> {
-    const runtime = mergeRequirement.preferredRuntime ?? tentacles[0]?.runtime ?? "python"
-    const mergeSpec = await readPrompt("merge-spec.md").catch(() => "")
-    const prompt = [
-      "You are merging multiple OpenCeph tentacles into a single new tentacle project.",
-      mergeSpec,
-      "",
-      `New tentacle id: ${mergeRequirement.newTentacleId}`,
-      `New purpose: ${mergeRequirement.newPurpose}`,
-      `Preferred runtime: ${runtime}`,
-      "",
-      ...tentacles.map((tentacle) => [
-        `## ${tentacle.tentacleId}`,
-        `purpose: ${tentacle.purpose}`,
-        `runtime: ${tentacle.runtime}`,
-        ...tentacle.codeFiles.map((file) => `--- ${file.path} ---\n${file.content}`),
-      ].join("\n")),
-      "",
-      "Rewrite the project in the current working directory using tools only.",
-      "You must preserve the OpenCeph IPC contract and generate a coherent merged tentacle.",
-    ].join("\n")
+    return this.withExclusiveGeneratedRun(mergeRequirement.newTentacleId, "merge", async (sessionFile) => {
+      const runtime = mergeRequirement.preferredRuntime ?? tentacles[0]?.runtime ?? "python"
+      const mergeSpec = await readPrompt("merge-spec.md").catch(() => "")
+      const prompt = [
+        "You are merging multiple OpenCeph tentacles into a single new tentacle project.",
+        mergeSpec,
+        "",
+        `New tentacle id: ${mergeRequirement.newTentacleId}`,
+        `New purpose: ${mergeRequirement.newPurpose}`,
+        `Preferred runtime: ${runtime}`,
+        "",
+        ...tentacles.map((tentacle) => [
+          `## ${tentacle.tentacleId}`,
+          `purpose: ${tentacle.purpose}`,
+          `runtime: ${tentacle.runtime}`,
+          ...tentacle.codeFiles.map((file) => `--- ${file.path} ---\n${file.content}`),
+        ].join("\n")),
+        "",
+        "Rewrite the project in the current working directory using tools only.",
+        "You must preserve the OpenCeph IPC contract and generate a coherent merged tentacle.",
+      ].join("\n")
 
-    return this.runGeneratedCode(prompt, {
-      tentacleId: mergeRequirement.newTentacleId,
-      purpose: mergeRequirement.newPurpose,
-      workflow: "Merged workflow from source tentacles",
-      capabilities: [],
-      reportStrategy: "Report merged findings using consultation sessions",
-      preferredRuntime: runtime as CodeAgentRequirement["preferredRuntime"],
-      userContext: "",
-    }, runtime, "merge")
+      return this.runGeneratedCode(prompt, {
+        tentacleId: mergeRequirement.newTentacleId,
+        purpose: mergeRequirement.newPurpose,
+        workflow: "Merged workflow from source tentacles",
+        capabilities: [],
+        reportStrategy: "Report merged findings using consultation sessions",
+        preferredRuntime: runtime as CodeAgentRequirement["preferredRuntime"],
+        userContext: "",
+      }, runtime, "merge", sessionFile)
+    })
   }
 
   private async runGeneratedCode(
@@ -227,16 +400,15 @@ export class CodeAgent {
     requirement: CodeAgentRequirement,
     runtime: string,
     mode: "generate" | "fix" | "merge",
+    sessionFile: string,
   ): Promise<GeneratedCode> {
     if (shouldUseEmergencyFallback()) {
       return buildEmergencyFallback(requirement, runtime)
     }
 
     const workDir = await this.prepareWorkDir(requirement.tentacleId, mode)
-    const sessionFile = await this.prepareSessionFile(requirement.tentacleId, mode)
     const promptFile = path.join(workDir, ".openceph-prompt.md")
     await fs.writeFile(promptFile, prompt, "utf-8")
-    this.acquireRun(requirement.tentacleId, sessionFile)
 
     try {
       codeAgentLogger.info("code_agent_session_create", {
@@ -261,8 +433,6 @@ export class CodeAgent {
         sessionFile,
         prompt,
         workDir,
-        pollIntervalMs: this.config.tentacle.codeGenPollIntervalMs,
-        idleTimeoutMs: this.config.tentacle.codeGenIdleTimeoutMs ?? 60_000,
       })
       const generated = await this.collectGeneratedFiles(workDir, requirement, runtime, run)
       codeAgentLogger.info("code_agent_session_success", {
@@ -289,12 +459,28 @@ export class CodeAgent {
       throw error
     } finally {
       await fs.unlink(promptFile).catch(() => undefined)
-      this.releaseRun(requirement.tentacleId, sessionFile)
+    }
+  }
+
+  private async withExclusiveGeneratedRun<T>(
+    tentacleId: string,
+    mode: "generate" | "fix" | "merge",
+    fn: (sessionFile: string) => Promise<T>,
+  ): Promise<T> {
+    const sessionFile = this.buildSessionFilePath(tentacleId, mode)
+    this.acquireRun(tentacleId, sessionFile)
+
+    try {
+      await fs.mkdir(path.dirname(sessionFile), { recursive: true })
+      return await fn(sessionFile)
+    } finally {
+      this.releaseRun(tentacleId, sessionFile)
     }
   }
 
   private async runWithPolling(options: RunWithPollingOptions): Promise<RunWithPollingResult> {
-    const { tentacleId, sessionFile, prompt, workDir, pollIntervalMs, idleTimeoutMs } = options
+    const { tentacleId, sessionFile, prompt, workDir } = options
+    const polling = this.resolveClaudePollingStrategy()
     const startTime = this.now()
     let lastActivityAt = this.now()
     let turnCount = 0
@@ -308,8 +494,12 @@ export class CodeAgent {
     let claudeSessionId: string | undefined
     let modelId: string | undefined
     let resultSubtype: string | undefined
+    let phase: "normal" | "warning" = "normal"
+    let warningStartAt = 0
+    let lastObservedStdoutLength = 0
+    let lastObservedStderrLength = 0
     let settled = false
-    let pollTimer: ReturnType<typeof setInterval> | null = null
+    let pollTimer: ReturnType<typeof setTimeout> | null = null
     let idleKillTimer: ReturnType<typeof setTimeout> | null = null
 
     const writer = createJsonlWriter(sessionFile)
@@ -330,6 +520,7 @@ export class CodeAgent {
         cwd: workDir,
         env: {
           ...process.env,
+          ...buildTentacleModelEnv(this.config),
         },
         stdio: ["pipe", "pipe", "pipe"],
       })
@@ -342,7 +533,7 @@ export class CodeAgent {
           idleKillTimer = null
         }
         if (pollTimer) {
-          clearInterval(pollTimer)
+          clearTimeout(pollTimer)
           pollTimer = null
         }
         await writer.close()
@@ -534,10 +725,30 @@ export class CodeAgent {
           return
         }
 
+        const completedAt = this.now()
+        codeAgentLogger.info("code_agent_complete", {
+          tentacle_id: tentacleId,
+          session_file: sessionFile,
+          work_dir: workDir,
+          elapsed_ms: completedAt - startTime,
+          turn_count: turnCount,
+          stdout_length: stdoutBuffer.length,
+          stderr_length: stderr.length,
+          result_subtype: resultSubtype,
+        })
+        appendEvent({
+          type: "complete",
+          timestamp: new Date(completedAt).toISOString(),
+          elapsed_ms: completedAt - startTime,
+          turn_count: turnCount,
+          stdout_length: stdoutBuffer.length,
+          stderr_length: stderr.length,
+          result_subtype: resultSubtype,
+        })
         await finish(() => resolve({
           sessionFile,
           workDir,
-          elapsedMs: this.now() - startTime,
+          elapsedMs: completedAt - startTime,
           turnCount,
           toolCalls: Array.from(toolCalls.values()),
           finalText: finalText.trim() || undefined,
@@ -551,24 +762,93 @@ export class CodeAgent {
       proc.stdin.write(prompt)
       proc.stdin.end()
 
-      pollTimer = setInterval(() => {
+      const schedulePoll = (delayMs: number) => {
+        pollTimer = setTimeout(poll, delayMs)
+      }
+
+      const poll = () => {
         if (settled) return
         const now = this.now()
         const elapsed = now - startTime
         const idleMs = now - lastActivityAt
+        const stdoutLength = stdoutBuffer.length
+        const stderrLength = stderr.length
+        const hasNewOutput = stdoutLength > lastObservedStdoutLength || stderrLength > lastObservedStderrLength
 
-        appendEvent({
-          type: "poll",
-          timestamp: new Date(now).toISOString(),
-          elapsed_ms: elapsed,
-          idle_ms: idleMs,
-          turn_count: turnCount,
-          last_tool: lastToolName,
-          is_active: idleMs < pollIntervalMs,
-        })
+        if (hasNewOutput) {
+          const clearedWarning = phase === "warning"
+          phase = "normal"
+          warningStartAt = 0
+          lastObservedStdoutLength = stdoutLength
+          lastObservedStderrLength = stderrLength
 
-        if (idleMs > idleTimeoutMs) {
-          codeAgentLogger.error("code_agent_idle_timeout", {
+          appendEvent({
+            type: "poll",
+            timestamp: new Date(now).toISOString(),
+            phase: clearedWarning ? "warning_cleared" : "normal",
+            elapsed_ms: elapsed,
+            idle_ms: idleMs,
+            turn_count: turnCount,
+            last_tool: lastToolName,
+            stdout_length: stdoutLength,
+            stderr_length: stderrLength,
+            has_new_output: true,
+            status: "active",
+          })
+          codeAgentLogger.info("code_agent_poll", {
+            tentacle_id: tentacleId,
+            session_file: sessionFile,
+            work_dir: workDir,
+            phase: clearedWarning ? "warning_cleared" : "normal",
+            elapsed_ms: elapsed,
+            idle_ms: idleMs,
+            turn_count: turnCount,
+            last_tool: lastToolName,
+            stdout_length: stdoutLength,
+            stderr_length: stderrLength,
+            status: "active",
+          })
+          schedulePoll(polling.normalPollMs)
+          return
+        }
+
+        if (phase === "normal") {
+          phase = "warning"
+          warningStartAt = now
+          appendEvent({
+            type: "poll",
+            timestamp: new Date(now).toISOString(),
+            phase: "entering_warning",
+            elapsed_ms: elapsed,
+            idle_ms: idleMs,
+            turn_count: turnCount,
+            last_tool: lastToolName,
+            stdout_length: stdoutLength,
+            stderr_length: stderrLength,
+            has_new_output: false,
+            warning_duration_ms: polling.warningTimeoutMs,
+            status: "waiting",
+          })
+          codeAgentLogger.warn("code_agent_warning", {
+            tentacle_id: tentacleId,
+            session_file: sessionFile,
+            work_dir: workDir,
+            phase: "entering_warning",
+            elapsed_ms: elapsed,
+            idle_ms: idleMs,
+            turn_count: turnCount,
+            last_tool: lastToolName,
+            stdout_length: stdoutLength,
+            stderr_length: stderrLength,
+            warning_duration_ms: polling.warningTimeoutMs,
+          })
+          schedulePoll(polling.warningPollMs)
+          return
+        }
+
+        const warningElapsedMs = now - warningStartAt
+        if (warningElapsedMs >= polling.warningTimeoutMs) {
+          codeAgentLogger.error("code_agent_timeout", {
             tentacle_id: tentacleId,
             session_file: sessionFile,
             work_dir: workDir,
@@ -576,49 +856,70 @@ export class CodeAgent {
             idle_ms: idleMs,
             turn_count: turnCount,
             last_tool: lastToolName,
+            stdout_length: stdoutLength,
+            stderr_length: stderrLength,
+            warning_elapsed_ms: warningElapsedMs,
+            warning_timeout_ms: polling.warningTimeoutMs,
           })
           appendEvent({
             type: "timeout",
             timestamp: new Date(now).toISOString(),
-            reason: "idle",
+            reason: "warning_idle",
             elapsed_ms: elapsed,
             idle_ms: idleMs,
+            turn_count: turnCount,
+            stdout_length: stdoutLength,
+            stderr_length: stderrLength,
+            warning_elapsed_ms: warningElapsedMs,
+            warning_timeout_ms: polling.warningTimeoutMs,
           })
           proc.kill("SIGTERM")
           idleKillTimer = setTimeout(() => {
             if (!settled) {
               proc.kill("SIGKILL")
             }
-          }, 2_000)
+          }, polling.killGraceMs)
           void fail(new CodeAgentTimeoutError(
-            `Claude Code 连续 ${Math.round(idleMs / 1000)}s 无进展，已终止。总耗时 ${Math.round(elapsed / 1000)}s`,
+            `Claude Code 连续 ${Math.round(warningElapsedMs / 1000)}s 无新输出，已终止。总耗时 ${Math.round(elapsed / 1000)}s`,
             { turnCount, elapsedMs: elapsed, sessionFile },
           ))
           return
         }
 
-        if (idleMs > pollIntervalMs * 2) {
-          codeAgentLogger.warn("code_agent_idle", {
-            tentacle_id: tentacleId,
-            session_file: sessionFile,
-            work_dir: workDir,
-            idle_ms: idleMs,
-            turn_count: turnCount,
-            last_tool: lastToolName,
-          })
-        }
-
+        appendEvent({
+          type: "poll",
+          timestamp: new Date(now).toISOString(),
+          phase: "warning",
+          elapsed_ms: elapsed,
+          idle_ms: idleMs,
+          turn_count: turnCount,
+          last_tool: lastToolName,
+          stdout_length: stdoutLength,
+          stderr_length: stderrLength,
+          has_new_output: false,
+          warning_elapsed_ms: warningElapsedMs,
+          warning_remaining_ms: polling.warningTimeoutMs - warningElapsedMs,
+          status: "waiting",
+        })
         codeAgentLogger.info("code_agent_poll", {
           tentacle_id: tentacleId,
           session_file: sessionFile,
           work_dir: workDir,
+          phase: "warning",
           elapsed_ms: elapsed,
           idle_ms: idleMs,
           turn_count: turnCount,
-          is_active: idleMs < pollIntervalMs,
           last_tool: lastToolName,
+          stdout_length: stdoutLength,
+          stderr_length: stderrLength,
+          warning_elapsed_ms: warningElapsedMs,
+          warning_remaining_ms: polling.warningTimeoutMs - warningElapsedMs,
+          status: "waiting",
         })
-      }, pollIntervalMs)
+        schedulePoll(polling.warningPollMs)
+      }
+
+      schedulePoll(polling.normalPollMs)
     })
   }
 
@@ -698,7 +999,7 @@ export class CodeAgent {
     if (requirement.infrastructure) {
       sections.push([
         "Section 6: Infrastructure",
-        requirement.infrastructure.needsLlm ? "- Needs LLM calls (use OPENROUTER_API_KEY from env)" : "",
+        requirement.infrastructure.needsLlm ? "- Needs LLM calls (use OPENCEPH_LLM_API_KEY / OPENCEPH_LLM_BASE_URL / OPENCEPH_LLM_MODEL from env; OPENROUTER_* is legacy compatibility only)" : "",
         requirement.infrastructure.needsDatabase ? "- Needs local SQLite or file database" : "",
         requirement.infrastructure.needsHttpServer ? "- Needs an HTTP server or webhook listener" : "",
         requirement.infrastructure.needsFileStorage ? "- Needs file-based state persistence" : "",
@@ -819,6 +1120,30 @@ export class CodeAgent {
     return this.deps.now?.() ?? Date.now()
   }
 
+  private resolveClaudePollingStrategy(): {
+    normalPollMs: number
+    warningPollMs: number
+    warningTimeoutMs: number
+    killGraceMs: number
+  } {
+    const configuredNormalPollMs = this.config.tentacle.codeGenPollIntervalMs
+    const configuredWarningTimeoutMs = this.config.tentacle.codeGenIdleTimeoutMs
+
+    const normalPollMs = configuredNormalPollMs && configuredNormalPollMs !== 20_000
+      ? configuredNormalPollMs
+      : 30_000
+    const warningTimeoutMs = configuredWarningTimeoutMs && configuredWarningTimeoutMs !== 60_000
+      ? configuredWarningTimeoutMs
+      : 120_000
+
+    return {
+      normalPollMs,
+      warningPollMs: normalPollMs < 30_000 ? Math.max(10, Math.floor(normalPollMs / 3)) : 10_000,
+      warningTimeoutMs,
+      killGraceMs: normalPollMs < 30_000 ? Math.max(5, Math.floor(normalPollMs / 2)) : 5_000,
+    }
+  }
+
   private acquireRun(tentacleId: string, sessionFile: string): void {
     const existing = CodeAgent.activeRuns.get(tentacleId)
     if (existing) {
@@ -852,9 +1177,20 @@ export class CodeAgent {
   }
 
   private async prepareSessionFile(tentacleId: string, mode: "generate" | "fix" | "merge"): Promise<string> {
-    const baseDir = path.join(os.homedir(), ".openceph", "agents", "code-agent", "sessions")
-    await fs.mkdir(baseDir, { recursive: true })
-    return path.join(baseDir, `ca-${mode}-${tentacleId}-${Date.now()}.jsonl`)
+    const sessionFile = this.buildSessionFilePath(tentacleId, mode)
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true })
+    return sessionFile
+  }
+
+  private buildSessionFilePath(tentacleId: string, mode: "generate" | "fix" | "merge"): string {
+    return path.join(
+      os.homedir(),
+      ".openceph",
+      "agents",
+      "code-agent",
+      "sessions",
+      `ca-${mode}-${tentacleId}-${Date.now()}.jsonl`,
+    )
   }
 }
 
@@ -1013,7 +1349,16 @@ function inferEnvVars(requirement: CodeAgentRequirement): string[] {
     "OPENCEPH_TRIGGER_MODE",
   ]
   if (requirement.infrastructure?.needsLlm) {
-    vars.push("OPENROUTER_API_KEY")
+    vars.push(
+      "OPENCEPH_LLM_PROVIDER",
+      "OPENCEPH_LLM_API",
+      "OPENCEPH_LLM_BASE_URL",
+      "OPENCEPH_LLM_API_KEY",
+      "OPENCEPH_LLM_MODEL",
+      "OPENCEPH_LLM_FULL_MODEL",
+      "OPENCEPH_LLM_FALLBACKS_JSON",
+      "OPENCEPH_LLM_PARAMS_JSON",
+    )
   }
   return Array.from(new Set(vars))
 }

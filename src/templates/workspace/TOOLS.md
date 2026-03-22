@@ -22,11 +22,28 @@ cron_remove — 删除定时任务。
 cron_run — 手动触发定时任务。
 
 ## 触手工具
-spawn_from_skill — 从 SKILL 孵化触手（优先路径）。
+spawn_from_skill — 从 SKILL / skill_tentacle 孵化触手。可传 skill_tentacle_path（直接指向本地目录或 .tentacle 文件），package_after=true（生成完成后自动打包）。
 manage_tentacle — 暂停/恢复/关闭/削弱触手。
 manage_tentacle_schedule — 配置触手调度：为触手创建 cron / 启用 heartbeat / 切回自管频率。
 list_tentacles — 列出所有触手状态。
 inspect_tentacle_log — 查看触手日志。
+
+## skill_tentacle 包管理工具（CLI）
+以下工具通过终端 `openceph tentacle` 命令使用，或由大脑在 Tentacle Creator 流程中提示用户：
+
+tentacle pack — 将已部署触手打包为可分享的 `.tentacle` 文件。
+  用法：`openceph tentacle pack <tentacleId> [-o <outputDir>]`
+  场景：用户对触手效果满意，想分享给社区时使用。
+
+tentacle install — 安装 `.tentacle` 包到 `~/.openceph/skills/` 目录。
+  用法：`openceph tentacle install <path|github:user/repo/path>`
+  场景：安装社区分享的 skill_tentacle，之后可通过 spawn_from_skill 部署。
+
+tentacle info — 查看已安装 skill_tentacle 的详细信息。
+  用法：`openceph tentacle info <name>`
+  输出：名称、版本、运行时、依赖环境变量、capabilities、可自定义字段。
+
+tentacle list --installed — 列出所有已安装的 skill_tentacle 包（含版本、运行时、类型）。
 
 ## Heartbeat 工具
 create_heartbeat_task — 添加复盘任务到 HEARTBEAT.md。

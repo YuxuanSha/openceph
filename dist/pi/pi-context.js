@@ -29,6 +29,7 @@ export async function createPiContext(config) {
     const extensionPaths = [
         path.join(extensionsDir, "memory-injector.js"),
         path.join(extensionsDir, "context-pruner.js"),
+        path.join(extensionsDir, "push-message-merger.js"),
         path.join(extensionsDir, "compaction-guard.js"),
     ];
     const resourceLoader = new DefaultResourceLoader({

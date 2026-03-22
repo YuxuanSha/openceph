@@ -18,6 +18,7 @@ import { CronScheduler } from "./cron/cron-scheduler.js"
 import { parseDurationMs } from "./cron/time.js"
 import { SessionStoreManager } from "./session/session-store.js"
 import { readRuntimeStatus } from "./logger/runtime-status-store.js"
+import { systemLogger } from "./logger/index.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -133,6 +134,11 @@ program
       }
     }
 
+    const config = loadConfig()
+    if (config.builtinTentacles?.autoInstallOnInit !== false) {
+      await initBuiltinTentacles(skillsDest, config.builtinTentacles?.skipList ?? [])
+    }
+
     // Generate gateway token
     const tokenPath = path.join(CREDENTIALS_DIR, "gateway_token")
     if (!existsSync(tokenPath)) {
@@ -149,6 +155,20 @@ program
     console.log("  1. openceph credentials set openrouter <YOUR_API_KEY>")
     console.log("  2. openceph start  (verify config)")
     console.log('  3. openceph chat   (M1 阶段可用)')
+  })
+
+program
+  .command("upgrade")
+  .description("Upgrade builtin tentacles without overwriting prompt customizations")
+  .action(async () => {
+    const config = loadConfig()
+    initLoggers(config)
+    const skillsDest = path.join(OPENCEPH_HOME, "skills")
+    await fs.mkdir(skillsDest, { recursive: true })
+    if (config.builtinTentacles?.autoUpgradeOnUpdate !== false) {
+      await upgradeBuiltinTentacles(skillsDest, config.builtinTentacles?.skipList ?? [])
+    }
+    console.log(`Builtin tentacles synced in ${skillsDest}`)
   })
 
 // ─── openceph start ──────────────────────────────────────────────
@@ -564,6 +584,174 @@ cronCmd
     }
   })
 
+// ─── openceph tentacle ──────────────────────────────────────────
+
+const tentacleCmd = program
+  .command("tentacle")
+  .description("Manage skill_tentacle packages")
+
+tentacleCmd
+  .command("pack <tentacleId>")
+  .description("Package a deployed tentacle as a shareable .tentacle file")
+  .option("-o, --output <dir>", "Output directory")
+  .action(async (tentacleId: string, opts: { output?: string }) => {
+    try {
+      const { TentaclePackager } = await import("./skills/tentacle-packager.js")
+      const packager = new TentaclePackager(loadConfig().skillTentacle.packExclude)
+      const outputPath = await packager.pack(tentacleId, opts.output)
+      console.log(`Packaged: ${outputPath}`)
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
+tentacleCmd
+  .command("install <source>")
+  .description("Install a skill_tentacle from .tentacle file, github:user/repo/path, or local directory")
+  .action(async (source: string) => {
+    try {
+      const { TentaclePackager } = await import("./skills/tentacle-packager.js")
+      const packager = new TentaclePackager(loadConfig().skillTentacle.packExclude)
+      const targetDir = await packager.install(source)
+      console.log(`Installed to: ${targetDir}`)
+
+      // Validate the installed skill_tentacle
+      const { TentacleValidator } = await import("./code-agent/validator.js")
+      const validator = new TentacleValidator()
+      const result = await validator.validateSkillTentacle(targetDir)
+      if (result.passed) {
+        console.log("Validation: PASSED")
+      } else {
+        console.log("Validation: FAILED")
+        for (const check of Object.values(result.checks)) {
+          for (const err of check.errors) {
+            console.log(`  - ${err.message}`)
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
+tentacleCmd
+  .command("list")
+  .description("List all installed skill_tentacle packages")
+  .option("--installed", "List only installed skill_tentacles (default behavior)")
+  .action(async () => {
+    try {
+      const { TentaclePackager } = await import("./skills/tentacle-packager.js")
+      const packager = new TentaclePackager(loadConfig().skillTentacle.packExclude)
+      const installed = await packager.listInstalled()
+      if (installed.length === 0) {
+        console.log("No skill_tentacle packages installed.")
+        return
+      }
+      const nameW = Math.max(20, ...installed.map((i) => i.name.length)) + 2
+      const versionW = 10
+      const runtimeW = 12
+      console.log(
+        "  " + "NAME".padEnd(nameW) + "VERSION".padEnd(versionW) + "RUNTIME".padEnd(runtimeW) + "TYPE",
+      )
+      console.log("  " + "─".repeat(nameW + versionW + runtimeW + 16))
+      for (const item of installed) {
+        const type = item.isSkillTentacle ? "skill_tentacle" : "skill"
+        console.log(
+          "  " +
+          item.name.padEnd(nameW) +
+          (item.version ?? "—").padEnd(versionW) +
+          (item.runtime ?? "—").padEnd(runtimeW) +
+          type,
+        )
+      }
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
+tentacleCmd
+  .command("info <name>")
+  .description("Show details about an installed skill_tentacle")
+  .action(async (name: string) => {
+    try {
+      const { TentaclePackager } = await import("./skills/tentacle-packager.js")
+      const packager = new TentaclePackager(loadConfig().skillTentacle.packExclude)
+      const info = await packager.info(name)
+      if (!info) {
+        console.log(`Not found: ${name}`)
+        process.exit(1)
+      }
+      console.log(`\nName:        ${info.name}`)
+      console.log(`Version:     ${info.version ?? "—"}`)
+      console.log(`Description: ${info.description ?? "—"}`)
+      console.log(`Runtime:     ${info.runtime ?? "—"}`)
+      console.log(`Type:        ${info.isSkillTentacle ? "skill_tentacle" : "skill"}`)
+      console.log(`Path:        ${info.path}`)
+
+      const requires = info.requires as { bins?: string[]; env?: string[] } | undefined
+      if (requires?.bins?.length) {
+        console.log(`\nRequires (bins):`)
+        for (const b of requires.bins) console.log(`  - ${b}`)
+      }
+      if (requires?.env?.length) {
+        console.log(`\nRequires (env vars):`)
+        for (const e of requires.env) console.log(`  - ${e}`)
+      }
+
+      const capabilities = info.capabilities as string[] | undefined
+      if (capabilities?.length) {
+        console.log(`\nCapabilities: ${capabilities.join(", ")}`)
+      }
+
+      const customizable = info.customizable as Array<{ field: string; description: string; type: string }> | undefined
+      if (customizable?.length) {
+        console.log(`\nCustomizable Fields:`)
+        for (const f of customizable) {
+          console.log(`  ${f.field.padEnd(24)} [${f.type}]  ${f.description}`)
+        }
+      }
+      console.log()
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
+tentacleCmd
+  .command("validate <path>")
+  .description("Validate a skill_tentacle directory")
+  .action(async (targetPath: string) => {
+    try {
+      const { TentacleValidator } = await import("./code-agent/validator.js")
+      const validator = new TentacleValidator()
+      const absPath = path.resolve(targetPath)
+      const result = await validator.validateSkillTentacle(absPath)
+      if (result.passed) {
+        console.log("Validation: PASSED")
+      } else {
+        console.log("Validation: FAILED")
+        for (const [checkName, check] of Object.entries(result.checks)) {
+          if (check.errors.length > 0) {
+            console.log(`\n  [${checkName}]`)
+            for (const err of check.errors) {
+              console.log(`    - ${err.message}`)
+            }
+          }
+          for (const w of check.warnings) {
+            console.log(`    ⚠ ${w}`)
+          }
+        }
+      }
+      process.exit(result.passed ? 0 : 1)
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
 // ─── openceph logs ───────────────────────────────────────────────
 
 program
@@ -870,7 +1058,9 @@ pluginCmd
     }
   })
 
-program.parse()
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  program.parse()
+}
 
 // ─── CLI Helpers ────────────────────────────────────────────────
 
@@ -1232,6 +1422,121 @@ async function writePluginOperation(payload: { type: "install" | "uninstall"; pa
   const opsPath = path.join(OPENCEPH_HOME, "state", "plugin-ops.json")
   await fs.mkdir(path.dirname(opsPath), { recursive: true })
   await fs.writeFile(opsPath, JSON.stringify(payload, null, 2), "utf-8")
+}
+
+export function getBuiltinTentaclesDir(): string {
+  return path.join(__dirname, "..", "builtin-tentacles")
+}
+
+async function readSkillVersion(skillDir: string): Promise<string> {
+  try {
+    const content = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8")
+    return content.match(/\nversion:\s*([^\n]+)/)?.[1]?.trim() ?? "0.0.0"
+  } catch {
+    return "0.0.0"
+  }
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function copyDirOverwrite(sourceDir: string, destDir: string): Promise<void> {
+  await fs.mkdir(destDir, { recursive: true })
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true })
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name)
+    const destPath = path.join(destDir, entry.name)
+    if (entry.isDirectory()) {
+      await copyDirOverwrite(sourcePath, destPath)
+    } else {
+      await fs.copyFile(sourcePath, destPath)
+    }
+  }
+}
+
+export async function initBuiltinTentacles(targetSkillsDir: string, skipList: string[] = []): Promise<void> {
+  const builtinDir = getBuiltinTentaclesDir()
+  if (!(await pathExists(builtinDir))) return
+
+  const entries = await fs.readdir(builtinDir, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isDirectory() || skipList.includes(entry.name)) continue
+    const sourcePath = path.join(builtinDir, entry.name)
+    const targetPath = path.join(targetSkillsDir, entry.name)
+
+    if (await pathExists(targetPath)) {
+      try {
+        systemLogger.info("builtin_tentacle_skip", { name: entry.name, reason: "already_exists" })
+      } catch {}
+      continue
+    }
+
+    await fs.cp(sourcePath, targetPath, { recursive: true })
+    try {
+      systemLogger.info("builtin_tentacle_installed", { name: entry.name })
+    } catch {}
+  }
+}
+
+export async function upgradeBuiltinTentacles(targetSkillsDir: string, skipList: string[] = []): Promise<void> {
+  const builtinDir = getBuiltinTentaclesDir()
+  if (!(await pathExists(builtinDir))) return
+
+  const entries = await fs.readdir(builtinDir, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isDirectory() || skipList.includes(entry.name)) continue
+
+    const sourcePath = path.join(builtinDir, entry.name)
+    const targetPath = path.join(targetSkillsDir, entry.name)
+
+    if (!(await pathExists(targetPath))) {
+      await fs.cp(sourcePath, targetPath, { recursive: true })
+      try {
+        systemLogger.info("builtin_tentacle_installed", { name: entry.name, reason: "missing_target" })
+      } catch {}
+      continue
+    }
+
+    const builtinVersion = await readSkillVersion(sourcePath)
+    const installedVersion = await readSkillVersion(targetPath)
+    if (builtinVersion === installedVersion) continue
+
+    const promptPath = path.join(targetPath, "prompt")
+    const backupDir = path.join(targetPath, `.backup-${installedVersion || "unknown"}`)
+    if (await pathExists(promptPath)) {
+      await fs.mkdir(backupDir, { recursive: true })
+      await fs.cp(promptPath, path.join(backupDir, "prompt"), { recursive: true })
+    }
+
+    for (const folder of ["src", "docs", "templates"]) {
+      const sourceFolder = path.join(sourcePath, folder)
+      if (await pathExists(sourceFolder)) {
+        await copyDirOverwrite(sourceFolder, path.join(targetPath, folder))
+      }
+    }
+
+    for (const fileName of ["SKILL.md", "README.md"]) {
+      const sourceFile = path.join(sourcePath, fileName)
+      if (await pathExists(sourceFile)) {
+        await fs.copyFile(sourceFile, path.join(targetPath, fileName))
+      }
+    }
+
+    try {
+      systemLogger.info("builtin_tentacle_upgraded", {
+        name: entry.name,
+        from: installedVersion,
+        to: builtinVersion,
+        promptBackup: backupDir,
+      })
+    } catch {}
+  }
 }
 
 async function copyDirIfMissing(sourceDir: string, destDir: string): Promise<void> {

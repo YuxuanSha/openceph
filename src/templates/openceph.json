@@ -44,11 +44,44 @@
     "paths": ["~/.openceph/workspace/skills", "~/.openceph/skills"]
   },
 
+  "builtinTentacles": {
+    "autoInstallOnInit": true,
+    "autoUpgradeOnUpdate": true,
+    "skipList": []
+  },
+
   "tentacle": {
     "maxActive": 20,
     "ipcSocketPath": "~/.openceph/openceph.sock",
     "codeGenMaxRetries": 3,
     "crashRestartMaxAttempts": 3,
+    "model": {
+      "primary": "openrouter/anthropic/claude-haiku-4-5",
+      "fallbacks": []
+    },
+    "models": {
+      "openrouter/anthropic/claude-haiku-4-5": {
+        "alias": "TentacleFast",
+        "params": {
+          "temperature": 0.2
+        }
+      }
+    },
+    "providers": {
+      "openrouter": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "api": "openai-completions"
+      }
+    },
+    "auth": {
+      "profiles": {
+        "openrouter:tentacle": {
+          "mode": "api_key",
+          "apiKey": "from:credentials/openrouter"
+        }
+      },
+      "order": { "openrouter": ["openrouter:tentacle"] }
+    },
     "confidenceThresholds": {
       "directReport": 0.8,
       "consultation": 0.4,

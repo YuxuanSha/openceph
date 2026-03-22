@@ -1,10 +1,20 @@
 import { execFile } from "child_process"
+import { existsSync } from "fs"
+import * as fs from "fs/promises"
+import * as path from "path"
 import { detectRuntimes } from "../tentacle/runtime-detector.js"
 import type { SkillEntry } from "./skill-loader.js"
+import type { ValidationError } from "../code-agent/code-agent.js"
 
 export interface ValidationResult {
   valid: boolean
   errors: string[]
+  warnings: string[]
+}
+
+export interface SkillTentacleValidationResult {
+  valid: boolean
+  errors: ValidationError[]
   warnings: string[]
 }
 
@@ -28,6 +38,7 @@ export class SkillInspector {
       },
       triggerKeywords: asStringArray(fields.trigger_keywords),
       emoji: asString(fields.emoji),
+      isSkillTentacle: false,
     }
   }
 
@@ -70,6 +81,181 @@ export class SkillInspector {
 
     return { valid: errors.length === 0, errors, warnings }
   }
+
+  /**
+   * M4: Check if a skill directory is a valid skill_tentacle.
+   * Conditions: metadata.openceph.tentacle.spawnable + prompt/SYSTEM.md + src/ + README.md
+   */
+  static isSkillTentacle(skillPath: string): boolean {
+    if (!existsSync(path.join(skillPath, "SKILL.md"))) return false
+    if (!existsSync(path.join(skillPath, "prompt", "SYSTEM.md"))) return false
+    if (!existsSync(path.join(skillPath, "src"))) return false
+    if (!existsSync(path.join(skillPath, "README.md"))) return false
+
+    // Check SKILL.md frontmatter for metadata.openceph.tentacle.spawnable
+    try {
+      const content = require("fs").readFileSync(path.join(skillPath, "SKILL.md"), "utf-8")
+      const fields = parseFrontmatter(content.replace(/\r\n/g, "\n"))
+      const metadata = fields.metadata as Record<string, unknown> | undefined
+      const openceph = metadata?.openceph as Record<string, unknown> | undefined
+      const tentacle = openceph?.tentacle as Record<string, unknown> | undefined
+      return tentacle?.spawnable === true || tentacle?.spawnable === "true"
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * M4: Validate a skill_tentacle directory for structural completeness.
+   */
+  static async validateSkillTentacle(skillPath: string): Promise<SkillTentacleValidationResult> {
+    const errors: ValidationError[] = []
+    const warnings: string[] = []
+
+    // Required files
+    const required = ["SKILL.md", "README.md", "prompt/SYSTEM.md"]
+    for (const f of required) {
+      if (!existsSync(path.join(skillPath, f))) {
+        errors.push({ check: "structure" as any, message: `必须文件缺失：${f}` })
+      }
+    }
+
+    // src/ directory must exist and have a main entry
+    if (!existsSync(path.join(skillPath, "src"))) {
+      errors.push({ check: "structure" as any, message: "src/ 目录缺失" })
+    } else {
+      // Check for entry file
+      const hasMain = existsSync(path.join(skillPath, "src", "main.py"))
+        || existsSync(path.join(skillPath, "src", "index.ts"))
+        || existsSync(path.join(skillPath, "src", "main.ts"))
+        || existsSync(path.join(skillPath, "src", "main.go"))
+        || existsSync(path.join(skillPath, "src", "main.sh"))
+      if (!hasMain) {
+        warnings.push("src/ 中未找到标准主入口文件（main.py / index.ts / main.go / main.sh）")
+      }
+
+      // Check for dependency file
+      const hasDeps = existsSync(path.join(skillPath, "src", "requirements.txt"))
+        || existsSync(path.join(skillPath, "src", "package.json"))
+        || existsSync(path.join(skillPath, "package.json"))
+        || existsSync(path.join(skillPath, "src", "go.mod"))
+      if (!hasDeps) {
+        warnings.push("未找到依赖声明文件（requirements.txt / package.json / go.mod）")
+      }
+    }
+
+    // SKILL.md frontmatter check
+    const skillMdPath = path.join(skillPath, "SKILL.md")
+    if (existsSync(skillMdPath)) {
+      try {
+        const skillMd = await fs.readFile(skillMdPath, "utf-8")
+        const fields = parseFrontmatter(skillMd.replace(/\r\n/g, "\n"))
+        const metadata = fields.metadata as Record<string, unknown> | undefined
+        const openceph = metadata?.openceph as Record<string, unknown> | undefined
+        const tentacle = openceph?.tentacle as Record<string, unknown> | undefined
+        if (!tentacle || (tentacle.spawnable !== true && tentacle.spawnable !== "true")) {
+          errors.push({
+            check: "structure" as any,
+            message: "SKILL.md frontmatter 缺少 metadata.openceph.tentacle.spawnable: true",
+          })
+        }
+      } catch {
+        errors.push({ check: "structure" as any, message: "无法解析 SKILL.md" })
+      }
+    }
+
+    // README.md content check
+    const readmePath = path.join(skillPath, "README.md")
+    if (existsSync(readmePath)) {
+      try {
+        const readme = await fs.readFile(readmePath, "utf-8")
+        if (!readme.includes("环境变量") && !readme.includes("Environment")) {
+          warnings.push("README.md 缺少环境变量章节")
+        }
+        if (!readme.includes("部署步骤") && !readme.includes("Deploy") && !readme.includes("Setup") && !readme.includes("部署")) {
+          warnings.push("README.md 缺少部署步骤章节")
+        }
+        if (!readme.includes("启动命令") && !readme.includes("Start") && !readme.includes("启动")) {
+          warnings.push("README.md 缺少启动命令章节")
+        }
+      } catch {
+        // ignore read errors
+      }
+    }
+
+    // prompt/SYSTEM.md non-empty check
+    const systemMdPath = path.join(skillPath, "prompt", "SYSTEM.md")
+    let systemMdContent = ""
+    if (existsSync(systemMdPath)) {
+      try {
+        systemMdContent = await fs.readFile(systemMdPath, "utf-8")
+        if (systemMdContent.trim().length < 50) {
+          errors.push({ check: "structure" as any, message: "prompt/SYSTEM.md 内容过短（< 50 字符）" })
+        }
+      } catch {
+        errors.push({ check: "structure" as any, message: "无法读取 prompt/SYSTEM.md" })
+      }
+    }
+
+    // Customizable field cross-referencing check
+    if (existsSync(skillMdPath)) {
+      try {
+        const skillMd = await fs.readFile(skillMdPath, "utf-8")
+        const fields = parseFrontmatter(skillMd.replace(/\r\n/g, "\n"))
+        const metadata = fields.metadata as Record<string, unknown> | undefined
+        const openceph = metadata?.openceph as Record<string, unknown> | undefined
+        const tentacle = openceph?.tentacle as Record<string, unknown> | undefined
+        const customizable = tentacle?.customizable
+        if (Array.isArray(customizable)) {
+          // Read all src/ code for env_var checking
+          let srcContent = ""
+          const srcDir = path.join(skillPath, "src")
+          if (existsSync(srcDir)) {
+            srcContent = await readDirContents(srcDir)
+          }
+
+          for (const item of customizable) {
+            if (typeof item !== "object" || item === null) continue
+            const field = item as Record<string, unknown>
+            const envVar = typeof field.env_var === "string" ? field.env_var : undefined
+            const promptPlaceholder = typeof field.prompt_placeholder === "string" ? field.prompt_placeholder : undefined
+            const fieldName = typeof field.field === "string" ? field.field : "unknown"
+
+            if (envVar && !srcContent.includes(envVar)) {
+              warnings.push(`customizable field "${fieldName}" 的 env_var "${envVar}" 未在 src/ 文件中找到引用`)
+            }
+            if (promptPlaceholder && systemMdContent && !systemMdContent.includes(promptPlaceholder)) {
+              warnings.push(`customizable field "${fieldName}" 的 prompt_placeholder "${promptPlaceholder}" 未在 prompt/SYSTEM.md 中找到`)
+            }
+          }
+        }
+      } catch {
+        // ignore parse errors — already reported above
+      }
+    }
+
+    return { valid: errors.length === 0, errors, warnings }
+  }
+}
+
+async function readDirContents(dir: string): Promise<string> {
+  const parts: string[] = []
+  const walk = async (d: string) => {
+    const entries = await fs.readdir(d, { withFileTypes: true })
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!["venv", "node_modules", "__pycache__"].includes(entry.name)) {
+          await walk(path.join(d, entry.name))
+        }
+      } else if (/\.(py|ts|js|go|sh)$/.test(entry.name)) {
+        try {
+          parts.push(await fs.readFile(path.join(d, entry.name), "utf-8"))
+        } catch {}
+      }
+    }
+  }
+  await walk(dir)
+  return parts.join("\n")
 }
 
 function hasCommand(command: string): Promise<boolean> {
@@ -116,16 +302,34 @@ function parseFrontmatter(content: string): Record<string, unknown> {
 
 function parseIndented(lines: string[]): unknown {
   const trimmed = lines.filter((line) => line.trim())
+  if (trimmed.length === 0) return ""
+
+  // Simple list: all items are "- scalar"
   if (trimmed.every((line) => line.trim().startsWith("- "))) {
     return trimmed.map((line) => parseScalar(line.trim().slice(2).trim()))
   }
 
+  // List of objects: first line starts with "- key:" and subsequent lines are indented
+  const firstStripped = trimmed[0].trim()
+  if (firstStripped.startsWith("- ")) {
+    return parseListOfObjects(trimmed)
+  }
+
+  // Determine the base indentation level (minimum indent of first key line)
+  const baseIndent = trimmed.reduce((min, line) => {
+    const match = line.match(/^(\s*)/)
+    const indent = match ? match[1].length : 0
+    return indent < min ? indent : min
+  }, Infinity)
+
   const result: Record<string, unknown> = {}
   let i = 0
   while (i < trimmed.length) {
-    const line = trimmed[i].replace(/^\s+/, "")
-    const match = line.match(/^([A-Za-z0-9_]+):(?:\s*(.*))?$/)
-    if (!match) {
+    const line = trimmed[i]
+    const lineIndent = (line.match(/^(\s*)/) || ["", ""])[1].length
+    const stripped = line.trim()
+    const match = stripped.match(/^([A-Za-z0-9_]+):(?:\s*(.*))?$/)
+    if (!match || lineIndent > baseIndent) {
       i++
       continue
     }
@@ -136,15 +340,52 @@ function parseIndented(lines: string[]): unknown {
       i++
       continue
     }
-    const items: string[] = []
+    // Collect nested content — lines with deeper indentation
+    const nestedLines: string[] = []
     i++
-    while (i < trimmed.length && trimmed[i].trim().startsWith("- ")) {
-      items.push(trimmed[i])
+    while (i < trimmed.length) {
+      const nextLineIndent = (trimmed[i].match(/^(\s*)/) || ["", ""])[1].length
+      if (nextLineIndent <= baseIndent) break
+      nestedLines.push(trimmed[i])
       i++
     }
-    result[key] = items.map((item) => parseScalar(item.trim().slice(2).trim()))
+    if (nestedLines.length > 0) {
+      result[key] = parseIndented(nestedLines)
+    } else {
+      result[key] = ""
+    }
   }
   return result
+}
+
+function parseListOfObjects(lines: string[]): unknown[] {
+  const items: string[][] = []
+  let current: string[] = []
+
+  for (const line of lines) {
+    const stripped = line.trim()
+    if (stripped.startsWith("- ")) {
+      if (current.length > 0) items.push(current)
+      current = [stripped.slice(2)]
+    } else {
+      current.push(stripped)
+    }
+  }
+  if (current.length > 0) items.push(current)
+
+  return items.map((itemLines) => {
+    if (itemLines.length === 1 && !itemLines[0].includes(":")) {
+      return parseScalar(itemLines[0])
+    }
+    const obj: Record<string, unknown> = {}
+    for (const itemLine of itemLines) {
+      const m = itemLine.match(/^([A-Za-z0-9_]+):(?:\s*(.*))?$/)
+      if (m) {
+        obj[m[1]] = parseScalar((m[2] ?? "").trim())
+      }
+    }
+    return obj
+  })
 }
 
 function parseScalar(value: string): unknown {

@@ -310,15 +310,15 @@ export function createTentacleTools(
     },
   }
 
-  // M3: Unified spawn_from_skill — works with or without SKILL blueprint
+  // M3+M4: Unified spawn_from_skill — works with skill_tentacle, legacy SKILL blueprint, or from scratch
   const spawnFromSkill: ToolDefinition = {
     name: "spawn_from_skill",
     label: "Spawn Tentacle",
-    description: "创建并部署新的触手 Agent 系统。有 SKILL 蓝图时作为 context 定制生成；无 SKILL 时从零生成。统一走 Claude Code 生成管线。",
+    description: "创建并部署新的触手 Agent 系统。skill_tentacle 直接部署（不生成代码）；有 SKILL 蓝图时作为 context 定制生成；无 SKILL 时按 skill_tentacle 规范从零生成。",
     parameters: Type.Object({
-      skill_name: Type.Optional(Type.String({ description: "SKILL 名，有则作为蓝图 context" })),
-      tentacle_id: Type.String({ description: "格式 t_{slug}" }),
-      purpose: Type.String({ description: "触手使命" }),
+      skill_name: Type.Optional(Type.String({ description: "SKILL 名称。有值时走场景一（部署已有 skill_tentacle）或兼容旧式 SKILL；无值时走场景二（从零生成）" })),
+      tentacle_id: Type.String({ description: "触手 ID，格式 t_{slug}" }),
+      purpose: Type.String({ description: "触手使命（一句话）" }),
       workflow: Type.String({ description: "工作流描述（自然语言）" }),
       capabilities: Type.Optional(Type.Array(Type.String())),
       report_strategy: Type.Optional(Type.String({ description: "什么情况下上报大脑" })),
@@ -335,6 +335,17 @@ export function createTentacleTools(
       external_apis: Type.Optional(Type.Array(Type.String())),
       preferred_runtime: Type.Optional(Type.String({ default: "auto" })),
       ask_user_confirm: Type.Optional(Type.Boolean({ default: true })),
+      // M4 additions
+      skill_tentacle_path: Type.Optional(Type.String({
+        description: "直接指向本地 skill_tentacle 目录或 .tentacle 文件路径，跳过 skill 搜索",
+      })),
+      package_after: Type.Optional(Type.Boolean({
+        description: "场景二完成后是否打包为可分享的 skill_tentacle",
+        default: false,
+      })),
+      config: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
+        description: "用户个性化配置（场景一时传入 customizable 字段值）",
+      })),
     }),
     async execute(_id, params: any) {
       void params.ask_user_confirm
@@ -355,6 +366,9 @@ export function createTentacleTools(
           externalApis: params.external_apis,
           preferredRuntime: params.preferred_runtime ?? "auto",
           userConfirmed: true,
+          skillTentaclePath: params.skill_tentacle_path,
+          packageAfter: params.package_after,
+          config: params.config,
         }
         const result = await skillSpawner.spawn(spawnParams)
         if (result.success) {
@@ -365,6 +379,13 @@ export function createTentacleTools(
             files: result.files,
             code_agent_session_file: result.codeAgentSessionFile,
             code_agent_work_dir: result.codeAgentWorkDir,
+          })
+          brainLogger.info("tentacle_creator_user_review", {
+            tentacle_id: params.tentacle_id,
+            spawned: result.spawned,
+            deployed: result.deployed,
+            package_path: result.packagePath,
+            source: result.source,
           })
           return ok(JSON.stringify(result, null, 2))
         }
