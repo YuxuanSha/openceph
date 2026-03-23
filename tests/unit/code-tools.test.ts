@@ -72,6 +72,8 @@ describe("invoke_code_agent tool", () => {
     expect(payload.previous_claude_session_id).toBe("claude-prev")
     expect(payload.current_claude_session_id).toBe("claude-current")
     expect(payload.brain_session_key).toBe("agent:ceph:main")
+    expect(payload.runtime_status).toBe("not_running")
+    expect(payload.requires_explicit_run_confirmation).toBe(true)
     expect(finalizeSpy).toHaveBeenCalledWith(expect.objectContaining({
       tentacleId: "t_test",
       brainSessionKey: "agent:ceph:main",

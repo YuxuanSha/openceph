@@ -10,6 +10,7 @@ import { loadConfig } from "./config/config-loader.js";
 import { CredentialStore } from "./config/credential-store.js";
 import { createPiContext } from "./pi/pi-context.js";
 import { initLoggers } from "./logger/index.js";
+import { initProcessRuntimeCapture } from "./logger/process-runtime-capture.js";
 import { fileURLToPath } from "url";
 import { CronStore } from "./cron/cron-store.js";
 import { CronRunner } from "./cron/cron-runner.js";
@@ -138,6 +139,7 @@ program
     .description("Upgrade builtin tentacles without overwriting prompt customizations")
     .action(async () => {
     const config = loadConfig();
+    initProcessRuntimeCapture(config.logging.logDir, "ceph");
     initLoggers(config);
     const skillsDest = path.join(OPENCEPH_HOME, "skills");
     await fs.mkdir(skillsDest, { recursive: true });

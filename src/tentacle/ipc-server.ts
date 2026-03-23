@@ -1,13 +1,28 @@
 import * as fs from "fs/promises"
 import { existsSync } from "fs"
 import * as net from "net"
+import type { Readable, Writable } from "stream"
 import { systemLogger } from "../logger/index.js"
 import type { IpcMessage } from "./contract.js"
 
+interface RegisteredChannel {
+  transport: "socket" | "stdio"
+  write: (line: string) => Promise<void>
+  close: () => void
+}
+
+interface StdioAttachment {
+  tentacleId: string
+  stdin: Writable | null
+  stdout: Readable | null
+  cleanup: () => void
+}
+
 export class IpcServer {
   private server: net.Server | null = null
-  private connections: Map<string, net.Socket> = new Map()
+  private connections: Map<string, RegisteredChannel> = new Map()
   private socketToTentacle: Map<net.Socket, string> = new Map()
+  private attachedProcesses: Map<string, StdioAttachment> = new Map()
   private messageHandler: ((tentacleId: string, message: IpcMessage) => Promise<void>) | null = null
 
   constructor(private socketPath: string) {}
@@ -32,7 +47,17 @@ export class IpcServer {
           try {
             const message = JSON.parse(line) as IpcMessage
             if (message.type === "tentacle_register") {
-              this.connections.set(message.sender, socket)
+              this.connections.set(message.sender, {
+                transport: "socket",
+                write: (lineToSend: string) =>
+                  new Promise<void>((resolve, reject) => {
+                    socket.write(lineToSend, (error) => {
+                      if (error) reject(error)
+                      else resolve()
+                    })
+                  }),
+                close: () => socket.destroy(),
+              })
               this.socketToTentacle.set(socket, message.sender)
             }
             void this.messageHandler?.(message.sender, message)
@@ -62,23 +87,55 @@ export class IpcServer {
     this.messageHandler = handler
   }
 
+  attachProcess(
+    tentacleId: string,
+    io: { stdin?: Writable | null; stdout?: Readable | null },
+  ): void {
+    const stdout = io.stdout ?? null
+    const stdin = io.stdin ?? null
+    let buffer = ""
+
+    const onStdoutData = (chunk: Buffer | string) => {
+      buffer += chunk.toString()
+      const lines = buffer.split("\n")
+      buffer = lines.pop() ?? ""
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim()
+        if (!line) continue
+        this.handleProcessLine(tentacleId, line, stdin)
+      }
+    }
+
+    const cleanup = () => {
+      if (stdout) {
+        stdout.off("data", onStdoutData)
+      }
+      this.attachedProcesses.delete(tentacleId)
+      this.connections.delete(tentacleId)
+    }
+
+    if (stdout) {
+      stdout.on("data", onStdoutData)
+      stdout.once("close", cleanup)
+      stdout.once("end", cleanup)
+    }
+
+    this.attachedProcesses.set(tentacleId, { tentacleId, stdin, stdout, cleanup })
+  }
+
   async sendToTentacle(tentacleId: string, message: IpcMessage): Promise<void> {
-    const socket = this.connections.get(tentacleId)
-    if (!socket) {
+    const channel = this.connections.get(tentacleId)
+    if (!channel) {
       throw new Error(`Tentacle not connected: ${tentacleId}`)
     }
-    await new Promise<void>((resolve, reject) => {
-      socket.write(`${JSON.stringify(message)}\n`, (error) => {
-        if (error) reject(error)
-        else resolve()
-      })
-    })
+    await channel.write(`${JSON.stringify(message)}\n`)
   }
 
   disconnect(tentacleId: string): void {
-    const socket = this.connections.get(tentacleId)
-    socket?.destroy()
+    this.connections.get(tentacleId)?.close()
     this.connections.delete(tentacleId)
+    this.attachedProcesses.get(tentacleId)?.cleanup()
   }
 
   getConnectedTentacles(): string[] {
@@ -87,10 +144,14 @@ export class IpcServer {
 
   async stop(): Promise<void> {
     for (const socket of this.connections.values()) {
-      socket.destroy()
+      socket.close()
     }
     this.connections.clear()
     this.socketToTentacle.clear()
+    for (const attached of this.attachedProcesses.values()) {
+      attached.cleanup()
+    }
+    this.attachedProcesses.clear()
 
     if (!this.server) return
     await new Promise<void>((resolve) => {
@@ -101,5 +162,46 @@ export class IpcServer {
     if (existsSync(this.socketPath)) {
       await fs.unlink(this.socketPath)
     }
+  }
+
+  private handleProcessLine(tentacleId: string, line: string, stdin: Writable | null): void {
+    let message: IpcMessage
+    try {
+      message = JSON.parse(line) as IpcMessage
+    } catch {
+      return
+    }
+
+    const sender = typeof message.sender === "string" && message.sender.trim()
+      ? message.sender
+      : tentacleId
+
+    if (message.type === "tentacle_register") {
+      this.connections.set(sender, {
+        transport: "stdio",
+        write: (lineToSend: string) => this.writeToProcess(sender, lineToSend),
+        close: () => {
+          const attached = this.attachedProcesses.get(sender) ?? this.attachedProcesses.get(tentacleId)
+          attached?.cleanup()
+        },
+      })
+    }
+
+    void this.messageHandler?.(sender, message)
+  }
+
+  private async writeToProcess(tentacleId: string, line: string): Promise<void> {
+    const attached = this.attachedProcesses.get(tentacleId)
+    const stdin = attached?.stdin
+    if (!stdin || stdin.destroyed || !stdin.writable) {
+      throw new Error(`Tentacle stdin unavailable: ${tentacleId}`)
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      stdin.write(line, (error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    })
   }
 }

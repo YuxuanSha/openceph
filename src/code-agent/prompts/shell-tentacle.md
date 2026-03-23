@@ -4,7 +4,7 @@ Generate a lightweight Shell tentacle for simple monitoring tasks.
 
 ## Architecture
 
-Shell tentacles use a Python helper for IPC (Unix socket communication requires it)
+Shell tentacles use a Python helper for IPC (stdin/stdout JSON Lines)
 and bash for the main work logic.
 
 ## Code Structure
@@ -17,9 +17,7 @@ and bash for the main work logic.
 ### Registration via Python helper
 ```bash
 python3 - <<'PY'
-import json, os, socket, time, uuid
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(os.environ["OPENCEPH_SOCKET_PATH"])
+import json, os, sys, time, uuid
 msg = {
     "type": "tentacle_register",
     "sender": os.environ.get("OPENCEPH_TENTACLE_ID"),
@@ -28,8 +26,8 @@ msg = {
     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     "message_id": str(uuid.uuid4()),
 }
-sock.sendall((json.dumps(msg) + "\n").encode())
-sock.close()
+sys.stdout.write(json.dumps(msg) + "\n")
+sys.stdout.flush()
 PY
 ```
 
@@ -42,7 +40,6 @@ done
 ```
 
 ## Environment Variables
-- `OPENCEPH_SOCKET_PATH` — Unix socket path (required)
 - `OPENCEPH_TENTACLE_ID` — Tentacle identifier (required)
 - `OPENCEPH_TRIGGER_MODE` — "self" or "external" (required)
 

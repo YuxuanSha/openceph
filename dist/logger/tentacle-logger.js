@@ -1,5 +1,6 @@
 import { createLogger } from "./create-logger.js";
 import * as path from "path";
+import { getTentacleLogsDir } from "./log-paths.js";
 const loggers = new Map();
 let logDir = null;
 let logLevel = "info";
@@ -17,8 +18,9 @@ function getOrCreateLogger(tentacleId) {
     }
     let logger = loggers.get(tentacleId);
     if (!logger) {
+        const tentacleLogDir = getTentacleLogsDir(logDir, tentacleId);
         logger = createLogger({
-            filename: path.join(logDir, `tentacle-${tentacleId}-%DATE%.log`),
+            filename: path.join(tentacleLogDir, "events-%DATE%.log"),
             level: logLevel,
             maxSize: `${maxSizeMb}m`,
             maxFiles: `${keepDays}d`,

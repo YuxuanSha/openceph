@@ -9,9 +9,143 @@ import type { TentacleScheduleConfig } from "../tentacle/tentacle-schedule.js"
 import type { TentacleLifecycleManager, StrengthenConfig, MergeConfig } from "../tentacle/lifecycle.js"
 import type { TentacleReviewEngine } from "../tentacle/review-engine.js"
 import { brainLogger } from "../logger/index.js"
+import { getTentacleLogsDir, getStreamLogPaths } from "../logger/log-paths.js"
 
 function ok(text: string) {
   return { content: [{ type: "text" as const, text }], details: undefined }
+}
+
+function normalizeScheduleAction(action: string): string {
+  if (action === "update_self_schedule_config") return "set_self_schedule"
+  return action
+}
+
+function normalizeDurationInput(input: string): string {
+  const trimmed = input.trim().toLowerCase().replace(/^every\s+/, "")
+  if (!trimmed) {
+    throw new Error("Duration cannot be empty")
+  }
+  if (/^\d+(?:\.\d+)?(?:ms|s|m|h|d|w)$/.test(trimmed)) {
+    return trimmed
+  }
+  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(milliseconds?|millisecond|msecs?|msec|secs?|sec|seconds?|minutes?|mins?|min|hours?|hrs?|hr|days?|day|weeks?|week)$/)
+  if (!match) {
+    throw new Error(`Invalid duration: ${input}`)
+  }
+  const unitMap: Record<string, string> = {
+    millisecond: "ms",
+    milliseconds: "ms",
+    msec: "ms",
+    msecs: "ms",
+    sec: "s",
+    secs: "s",
+    second: "s",
+    seconds: "s",
+    min: "m",
+    mins: "m",
+    minute: "m",
+    minutes: "m",
+    hr: "h",
+    hrs: "h",
+    hour: "h",
+    hours: "h",
+    day: "d",
+    days: "d",
+    week: "w",
+    weeks: "w",
+  }
+  return `${match[1]}${unitMap[match[2]]}`
+}
+
+async function resolveTentacleArtifacts(
+  manager: TentacleManager,
+  logDir: string,
+  tentacleId: string,
+): Promise<{
+  tentacleDir: string
+  logsDir: string
+  stdoutLog: string
+  stderrLog: string
+  terminalLog: string
+  eventsLog?: string
+  dataPaths: string[]
+}> {
+  const tentacleDir = manager.getTentacleDir(tentacleId)
+  const preferredLogsDir = getTentacleLogsDir(logDir, tentacleId)
+  const legacyRuntimeDir = path.join(tentacleDir, "runtime")
+  let logsDir = preferredLogsDir
+  try {
+    await fs.stat(preferredLogsDir)
+  } catch {
+    try {
+      await fs.stat(legacyRuntimeDir)
+      logsDir = legacyRuntimeDir
+    } catch {
+      logsDir = preferredLogsDir
+    }
+  }
+  const streamLogs = getStreamLogPaths(logsDir)
+
+  let eventsLog: string | undefined
+  try {
+    const files = (await fs.readdir(logsDir))
+      .filter((file) => file.startsWith("events-"))
+      .sort()
+    const latest = files.at(-1)
+    if (latest) {
+      eventsLog = path.join(logsDir, latest)
+    }
+  } catch {
+    eventsLog = undefined
+  }
+
+  const dataCandidates = [
+    path.join(tentacleDir, ".env"),
+    path.join(tentacleDir, "tentacle.json"),
+    path.join(tentacleDir, "data"),
+    path.join(tentacleDir, "sessions"),
+  ]
+
+  try {
+    const entries = await fs.readdir(tentacleDir)
+    for (const entry of entries) {
+      if (entry.endsWith(".db") || entry.endsWith(".sqlite") || entry.endsWith(".sqlite3")) {
+        dataCandidates.push(path.join(tentacleDir, entry))
+      }
+    }
+  } catch {
+    // Ignore missing tentacle directories here; inspect command will surface paths anyway.
+  }
+
+  const dataPaths: string[] = []
+  for (const candidate of dataCandidates) {
+    try {
+      await fs.stat(candidate)
+      dataPaths.push(candidate)
+    } catch {
+      // Ignore missing artifacts.
+    }
+  }
+
+  return {
+    tentacleDir,
+    logsDir,
+    stdoutLog: streamLogs.stdoutLog,
+    stderrLog: streamLogs.stderrLog,
+    terminalLog: streamLogs.terminalLog,
+    eventsLog,
+    dataPaths,
+  }
+}
+
+async function tailTextFile(filePath: string, nLines: number): Promise<string> {
+  try {
+    const content = await fs.readFile(filePath, "utf-8")
+    const lines = content.trimEnd().split("\n")
+    return lines.slice(-nLines).join("\n")
+  } catch {
+    return ""
+  }
 }
 
 export function createTentacleTools(
@@ -28,18 +162,46 @@ export function createTentacleTools(
     parameters: Type.Object({
       status_filter: Type.Optional(Type.Union([
         Type.Literal("all"),
+        Type.Literal("active"),
         Type.Literal("running"),
+        Type.Literal("registered"),
+        Type.Literal("deploying"),
+        Type.Literal("pending"),
         Type.Literal("paused"),
+        Type.Literal("weakened"),
         Type.Literal("killed"),
         Type.Literal("crashed"),
       ])),
     }),
     async execute(_id, params: any) {
-      const items = manager.listAll({ status: params.status_filter ?? "all" })
-      if (items.length === 0) return ok("No tentacles found.")
-      return ok(items.map((item) =>
-        `${item.tentacleId}\nstatus=${item.status}\npid=${item.pid ?? "-"}\npurpose=${item.purpose ?? "-"}\ntrigger=${item.triggerSchedule ?? "-"}\nheartbeat=${item.scheduleConfig?.heartbeat?.enabled ? item.scheduleConfig.heartbeat.every : "off"}\ncron_jobs=${item.scheduleConfig?.cronJobs?.length ?? 0}`
-      ).join("\n\n"))
+      const filter = params.status_filter ?? "all"
+      const items = manager.listAll()
+      const filtered = filter === "all"
+        ? items
+        : filter === "active"
+          ? items.filter((item) => ["running", "registered", "paused", "weakened"].includes(item.status))
+          : items.filter((item) => item.status === filter)
+      if (filtered.length === 0) return ok("No tentacles found.")
+      const rendered = await Promise.all(filtered.map(async (item) => {
+        const artifacts = await resolveTentacleArtifacts(manager, logDir, item.tentacleId)
+        return [
+          item.tentacleId,
+          `status=${item.status}`,
+          `pid=${item.pid ?? "-"}`,
+          `purpose=${item.purpose ?? "-"}`,
+          `trigger=${item.triggerSchedule ?? "-"}`,
+          `heartbeat=${item.scheduleConfig?.heartbeat?.enabled ? item.scheduleConfig.heartbeat.every : "off"}`,
+          `cron_jobs=${item.scheduleConfig?.cronJobs?.length ?? 0}`,
+          `directory=${artifacts.tentacleDir}`,
+          `log_dir=${artifacts.logsDir}`,
+          `terminal_log=${artifacts.terminalLog}`,
+          `stdout_log=${artifacts.stdoutLog}`,
+          `stderr_log=${artifacts.stderrLog}`,
+          `events_log=${artifacts.eventsLog ?? "-"}`,
+          `data_paths=${artifacts.dataPaths.length > 0 ? artifacts.dataPaths.join(", ") : "-"}`,
+        ].join("\n")
+      }))
+      return ok(rendered.join("\n\n"))
     },
   }
 
@@ -151,6 +313,7 @@ export function createTentacleTools(
         Type.Literal("set_tentacle_heartbeat"),
         Type.Literal("disable_tentacle_heartbeat"),
         Type.Literal("set_self_schedule"),
+        Type.Literal("update_self_schedule_config"),
         Type.Literal("get_schedule"),
       ]),
       cron_config: Type.Optional(Type.Object({
@@ -168,16 +331,17 @@ export function createTentacleTools(
       })),
     }),
     async execute(_id, params: any) {
+      const action = normalizeScheduleAction(params.action)
       const current = (await manager.getTentacleSchedule(params.tentacle_id)) ?? {
         primaryTrigger: { type: "self-schedule", interval: "6h" },
         cronJobs: [],
       } satisfies TentacleScheduleConfig
 
-      if (params.action === "get_schedule") {
+      if (action === "get_schedule") {
         return ok(JSON.stringify(current, null, 2))
       }
 
-      if (params.action === "set_tentacle_cron") {
+      if (action === "set_tentacle_cron") {
         if (!params.cron_config?.expr) return ok("Error: cron_config.expr is required")
         const slug = (params.cron_config.name ?? "cron").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
         const jobId = `tc-${params.tentacle_id}-${slug || "run"}`
@@ -199,7 +363,7 @@ export function createTentacleTools(
         return ok(`Tentacle cron created: ${jobId}`)
       }
 
-      if (params.action === "remove_tentacle_cron") {
+      if (action === "remove_tentacle_cron") {
         const scheduler = manager.getCronScheduler()
         if (!scheduler || !params.cron_job_id) return ok("Error: cron_job_id is required")
         await scheduler.removeJob(params.cron_job_id)
@@ -213,12 +377,13 @@ export function createTentacleTools(
         return ok(`Tentacle cron removed: ${params.cron_job_id}`)
       }
 
-      if (params.action === "set_tentacle_heartbeat") {
+      if (action === "set_tentacle_heartbeat") {
         if (!params.heartbeat_config?.every) return ok("Error: heartbeat_config.every is required")
         const scheduler = manager.getCronScheduler()
         if (!scheduler) return ok("Error: cron scheduler not ready")
         const jobId = `thb-${params.tentacle_id}`
-        const everyMs = await import("../cron/time.js").then((m) => m.parseDurationMs(params.heartbeat_config.every))
+        const normalizedEvery = normalizeDurationInput(params.heartbeat_config.every)
+        const everyMs = await import("../cron/time.js").then((m) => m.parseDurationMs(normalizedEvery))
         const existing = scheduler.listJobs().find((job: any) => job.jobId === jobId)
         if (existing) {
           await scheduler.updateJob(jobId, {
@@ -239,7 +404,7 @@ export function createTentacleTools(
           ...current,
           heartbeat: {
             enabled: true,
-            every: params.heartbeat_config.every,
+            every: normalizedEvery,
             prompt: params.heartbeat_config.prompt ?? "Review recent findings and suggest strategy adjustments.",
             jobId,
           },
@@ -247,7 +412,7 @@ export function createTentacleTools(
         return ok(`Tentacle heartbeat enabled: ${jobId}`)
       }
 
-      if (params.action === "disable_tentacle_heartbeat") {
+      if (action === "disable_tentacle_heartbeat") {
         const scheduler = manager.getCronScheduler()
         const jobId = current.heartbeat?.jobId ?? `thb-${params.tentacle_id}`
         if (scheduler) {
@@ -260,8 +425,9 @@ export function createTentacleTools(
         return ok(`Tentacle heartbeat disabled: ${jobId}`)
       }
 
-      if (params.action === "set_self_schedule") {
+      if (action === "set_self_schedule") {
         if (!params.self_schedule_config?.interval) return ok("Error: self_schedule_config.interval is required")
+        const normalizedInterval = normalizeDurationInput(params.self_schedule_config.interval)
         const scheduler = manager.getCronScheduler()
         if (scheduler) {
           for (const jobId of current.cronJobs ?? []) {
@@ -272,10 +438,10 @@ export function createTentacleTools(
           }
         }
         await manager.setTentacleSchedule(params.tentacle_id, {
-          primaryTrigger: { type: "self-schedule", interval: params.self_schedule_config.interval },
+          primaryTrigger: { type: "self-schedule", interval: normalizedInterval },
           cronJobs: [],
         })
-        return ok(`Tentacle self schedule set: ${params.self_schedule_config.interval}`)
+        return ok(`Tentacle self schedule set: ${normalizedInterval}`)
       }
 
       return ok("Unsupported action")
@@ -293,17 +459,31 @@ export function createTentacleTools(
     }),
     async execute(_id, params: any) {
       try {
-        const files = (await fs.readdir(logDir))
-          .filter((file) => file.startsWith(`tentacle-${params.tentacle_id}-`))
-          .sort()
-        const file = files.at(-1)
-        if (!file) return ok(`No log file found for ${params.tentacle_id}`)
-        const content = await fs.readFile(path.join(logDir, file), "utf-8")
-        let lines = content.trim().split("\n")
-        if (params.event_filter) {
-          lines = lines.filter((line) => line.includes(params.event_filter))
+        const artifacts = await resolveTentacleArtifacts(manager, logDir, params.tentacle_id)
+        const terminalTail = await tailTextFile(artifacts.terminalLog, params.n_lines ?? 50)
+        let eventsTail = artifacts.eventsLog ? await tailTextFile(artifacts.eventsLog, params.n_lines ?? 50) : ""
+        if (params.event_filter && eventsTail) {
+          eventsTail = eventsTail
+            .split("\n")
+            .filter((line) => line.includes(params.event_filter))
+            .join("\n")
         }
-        return ok(lines.slice(-(params.n_lines ?? 50)).join("\n"))
+        return ok([
+          `tentacle_id=${params.tentacle_id}`,
+          `directory=${artifacts.tentacleDir}`,
+          `log_dir=${artifacts.logsDir}`,
+          `terminal_log=${artifacts.terminalLog}`,
+          `stdout_log=${artifacts.stdoutLog}`,
+          `stderr_log=${artifacts.stderrLog}`,
+          `events_log=${artifacts.eventsLog ?? "-"}`,
+          `data_paths=${artifacts.dataPaths.length > 0 ? artifacts.dataPaths.join(", ") : "-"}`,
+          "",
+          "[recent_terminal_output]",
+          terminalTail || "(empty)",
+          "",
+          "[recent_events_log]",
+          eventsTail || "(empty)",
+        ].join("\n"))
       } catch (error: any) {
         return ok(`Error: ${error.message}`)
       }
@@ -372,6 +552,14 @@ export function createTentacleTools(
         }
         const result = await skillSpawner.spawn(spawnParams)
         if (result.success) {
+          const rendered = {
+            ...result,
+            runtime_status: result.spawned ? "running" : "not_running",
+            requires_explicit_run_confirmation: !result.spawned,
+            next_step: result.spawned
+              ? "触手已通过 spawn + registration 确认运行。"
+              : "触手目前未运行；如需运行，必须继续检查 spawned/running 状态或显式执行启动动作。",
+          }
           brainLogger.info("skill_spawn_success", {
             tentacle_id: params.tentacle_id,
             runtime: result.runtime,
@@ -387,7 +575,7 @@ export function createTentacleTools(
             package_path: result.packagePath,
             source: result.source,
           })
-          return ok(JSON.stringify(result, null, 2))
+          return ok(JSON.stringify(rendered, null, 2))
         }
         brainLogger.error("skill_spawn_failed", {
           tentacle_id: params.tentacle_id,

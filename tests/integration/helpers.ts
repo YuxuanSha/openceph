@@ -73,42 +73,34 @@ export function makePythonTentacleCode(tentacleId: string, purpose: string): Gen
         path: "main.py",
         content: `import json
 import os
-import socket
 import threading
+import sys
 import time
 import uuid
 
 STOP = False
 
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(os.environ["OPENCEPH_SOCKET_PATH"])
-
 def send(msg_type, payload):
-    sock.sendall((json.dumps({
+    sys.stdout.write(json.dumps({
         "type": msg_type,
         "sender": os.environ.get("OPENCEPH_TENTACLE_ID", ${JSON.stringify(tentacleId)}),
         "receiver": "brain",
         "payload": payload,
         "timestamp": "x",
         "message_id": str(uuid.uuid4())
-    }) + "\\n").encode("utf-8"))
+    }) + "\\n")
+    sys.stdout.flush()
 
 def reader():
     global STOP
-    buffer = ""
-    while not STOP:
-        data = sock.recv(4096)
-        if not data:
+    for part in sys.stdin:
+        if STOP:
             break
-        buffer += data.decode("utf-8")
-        parts = buffer.split("\\n")
-        buffer = parts.pop() or ""
-        for part in parts:
-            if not part.strip():
-                continue
-            message = json.loads(part)
-            if message.get("type") == "directive" and (message.get("payload") or {}).get("action") == "kill":
-                STOP = True
+        if not part.strip():
+            continue
+        message = json.loads(part)
+        if message.get("type") == "directive" and (message.get("payload") or {}).get("action") == "kill":
+            STOP = True
 
 send("tentacle_register", {"purpose": ${JSON.stringify(purpose)}, "runtime": "python"})
 send("report_finding", {"findingId": "boot", "summary": "boot ok", "confidence": 0.9})
@@ -121,7 +113,7 @@ while not STOP:
     ],
     entryCommand: "python3 main.py",
     setupCommands: [],
-    envVars: ["OPENCEPH_SOCKET_PATH", "OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"],
+    envVars: ["OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"],
     description: purpose,
   }
 }

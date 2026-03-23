@@ -1,4 +1,5 @@
 import os
+import signal
 import threading
 import time
 from pathlib import Path
@@ -13,6 +14,8 @@ from ipc_client import IpcClient, load_dotenv
 BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(str(BASE_DIR))
 RUN_NOW = threading.Event()
+PAUSED = threading.Event()
+SHUTDOWN = threading.Event()
 PENDING: list[dict] = []
 
 
@@ -69,13 +72,28 @@ def flush_pending(ipc: IpcClient, store: SeenStore, findings: list[dict]):
 
 def main():
     tentacle_id = os.environ.get("OPENCEPH_TENTACLE_ID", "hn-radar")
-    ipc = IpcClient(os.environ["OPENCEPH_SOCKET_PATH"], tentacle_id)
+    ipc = IpcClient(tentacle_id)
     ipc.connect()
     ipc.register("Monitor Hacker News and report relevant items.", "python")
     store = SeenStore(BASE_DIR / "hn-radar.db")
 
+    signal.signal(signal.SIGTERM, lambda *_: (SHUTDOWN.set(), RUN_NOW.set()))
+    signal.signal(signal.SIGINT, lambda *_: (SHUTDOWN.set(), RUN_NOW.set()))
+
     def on_directive(payload: dict):
-        if payload.get("action") in {"run_now", "set_self_schedule"}:
+        action = payload.get("action")
+        if action == "pause":
+            PAUSED.set()
+            return
+        if action == "resume":
+            PAUSED.clear()
+            RUN_NOW.set()
+            return
+        if action == "kill":
+            SHUTDOWN.set()
+            RUN_NOW.set()
+            return
+        if action in {"run_now", "set_self_schedule"}:
             RUN_NOW.set()
 
     ipc.on_directive(on_directive)
@@ -83,12 +101,18 @@ def main():
         RUN_NOW.set()
 
     interval = int(os.environ.get("HN_INTERVAL_SECONDS", "7200"))
-    while True:
+    while not SHUTDOWN.is_set():
         RUN_NOW.wait(timeout=interval)
         RUN_NOW.clear()
+        if SHUTDOWN.is_set():
+            break
+        if PAUSED.is_set():
+            continue
         findings = run_once(store)
         if findings:
             flush_pending(ipc, store, findings)
+
+    ipc.close()
 
 
 if __name__ == "__main__":

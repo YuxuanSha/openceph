@@ -63,7 +63,7 @@ def build_items(store: ReleaseStore) -> list[dict]:
 
 def main():
     tentacle_id = os.environ.get("OPENCEPH_TENTACLE_ID", "github-release-watcher")
-    ipc = IpcClient(os.environ["OPENCEPH_SOCKET_PATH"], tentacle_id)
+    ipc = IpcClient(tentacle_id)
     ipc.connect()
     ipc.register("Monitor GitHub repositories for new releases and tags.", "python")
     store = ReleaseStore(BASE_DIR / "github-release-watcher.db")

@@ -342,7 +342,7 @@ export class TentacleLifecycleManager {
       entryCommand: metadata.entryCommand ?? inferEntryCommand(fileList.map((file) => file.path)),
       setupCommands: metadata.setupCommands ?? [],
       dependencies: metadata.dependencies,
-      envVars: metadata.envVars ?? ["OPENCEPH_SOCKET_PATH", "OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"],
+      envVars: metadata.envVars ?? ["OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"],
       ports: metadata.ports,
       description: patch.description || metadata.description || "Strengthened tentacle patch",
     }
@@ -362,7 +362,7 @@ export class TentacleLifecycleManager {
     if (hasContractMarkers) {
       return {
         ...code,
-        envVars: Array.from(new Set(code.envVars ?? ["OPENCEPH_SOCKET_PATH", "OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"])),
+        envVars: Array.from(new Set(code.envVars ?? ["OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"])),
       }
     }
 
@@ -385,13 +385,13 @@ export class TentacleLifecycleManager {
         runtime: "python",
         files: filtered,
         entryCommand: "python3 main.py",
-        envVars: Array.from(new Set([...(code.envVars ?? []), "OPENCEPH_SOCKET_PATH", "OPENCEPH_IPC_SOCKET", "OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"])),
+        envVars: Array.from(new Set([...(code.envVars ?? []), "OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"])),
       }
     }
 
     return {
       ...code,
-      envVars: Array.from(new Set([...(code.envVars ?? []), "OPENCEPH_SOCKET_PATH", "OPENCEPH_IPC_SOCKET", "OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"])),
+      envVars: Array.from(new Set([...(code.envVars ?? []), "OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"])),
     }
   }
 }
@@ -432,7 +432,6 @@ function inferEntryCommand(files: string[]): string {
 function buildLifecyclePythonMain(tentacleId: string, purpose: string): string {
   return `import json
 import os
-import socket
 import sys
 import threading
 import time
@@ -440,23 +439,20 @@ import uuid
 
 STOP = False
 PAUSED = False
-SOCKET_PATH = os.environ.get("OPENCEPH_SOCKET_PATH") or os.environ.get("OPENCEPH_IPC_SOCKET") or ""
 TRIGGER_MODE = os.environ.get("OPENCEPH_TRIGGER_MODE", "external")
 TENTACLE_ID = os.environ.get("OPENCEPH_TENTACLE_ID", ${JSON.stringify(tentacleId)})
 PURPOSE = ${JSON.stringify(purpose)}
 
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(SOCKET_PATH)
-
 def send(msg_type, payload):
-    sock.sendall((json.dumps({
+    sys.stdout.write(json.dumps({
         "type": msg_type,
         "sender": TENTACLE_ID,
         "receiver": "brain",
         "payload": payload,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "message_id": str(uuid.uuid4())
-    }) + "\\n").encode("utf-8"))
+    }) + "\\n")
+    sys.stdout.flush()
 
 def emit_consultation(reason):
     send("consultation_request", {
@@ -488,27 +484,21 @@ def handle_directive(message):
             emit_consultation("run_now")
     elif action == "kill":
         STOP = True
-        try:
-            sock.close()
-        finally:
-            sys.exit(0)
+        sys.exit(0)
 
 def reader():
     global STOP
-    buffer = ""
-    while not STOP:
-        data = sock.recv(4096)
-        if not data:
+    for part in sys.stdin:
+        if STOP:
             break
-        buffer += data.decode("utf-8")
-        parts = buffer.split("\\n")
-        buffer = parts.pop() or ""
-        for part in parts:
-            if not part.strip():
-                continue
+        if not part.strip():
+            continue
+        try:
             message = json.loads(part)
             if message.get("type") == "directive":
                 handle_directive(message)
+        except Exception:
+            continue
 
 send("tentacle_register", {"purpose": PURPOSE, "runtime": "python", "triggerMode": TRIGGER_MODE})
 emit_consultation("boot")

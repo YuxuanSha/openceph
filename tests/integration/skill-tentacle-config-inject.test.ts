@@ -75,8 +75,6 @@ describe("integration: skill_tentacle config injection", () => {
 
     // Simulate .env generation (as done by SkillSpawner.injectUserConfig)
     const envLines: string[] = [
-      `OPENCEPH_SOCKET_PATH=/tmp/openceph.sock`,
-      `OPENCEPH_IPC_SOCKET=/tmp/openceph.sock`,
       `OPENCEPH_TENTACLE_ID=t_test`,
       `OPENCEPH_TRIGGER_MODE=self`,
       `# Custom env vars`,
@@ -87,7 +85,6 @@ describe("integration: skill_tentacle config injection", () => {
     fs.writeFileSync(envPath, envLines.join("\n") + "\n")
 
     const content = fs.readFileSync(envPath, "utf-8")
-    expect(content).toContain("OPENCEPH_SOCKET_PATH=/tmp/openceph.sock")
     expect(content).toContain("OPENCEPH_TENTACLE_ID=t_test")
     expect(content).toContain("OPENCEPH_TRIGGER_MODE=self")
     expect(content).toContain("GITHUB_TOKEN=ghp_test123")

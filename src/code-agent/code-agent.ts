@@ -8,6 +8,7 @@ import { fileURLToPath } from "url"
 import type { OpenCephConfig } from "../config/config-schema.js"
 import { buildTentacleModelEnv } from "../config/model-runtime.js"
 import { brainLogger, codeAgentLogger } from "../logger/index.js"
+import { getCodeAgentRunLogsDir, getStreamLogPaths } from "../logger/log-paths.js"
 import type { PiContext } from "../pi/pi-context.js"
 import { detectRuntimes } from "../tentacle/runtime-detector.js"
 import type { TentacleCapability } from "../tentacle/contract.js"
@@ -236,7 +237,7 @@ export class CodeAgent {
 
   // ── M4: Scene 1 — Deploy existing skill_tentacle (minimal prompt) ──
 
-  async deployExisting(tentacleDir: string): Promise<void> {
+  async deployExisting(tentacleDir: string): Promise<CodeAgentSessionArtifact> {
     const prompt = `You are deploying a pre-built tentacle agent for OpenCeph.
 
 Working directory: ${tentacleDir}
@@ -249,19 +250,19 @@ Instructions:
 4. Do NOT modify files in src/ or prompt/ directories
 5. After setup, optionally run the --dry-run command if README.md describes one
 6. Report success or failure with details
+7. Never claim the tentacle is already running/spawned unless you actually started it yourself in this session
 
 The tentacle implements the OpenCeph IPC contract and will be
 managed by OpenCeph's TentacleManager after deployment.`
 
-    if (shouldUseEmergencyFallback()) {
-      return // skip in test mode
-    }
-
     const sessionFile = await this.prepareSessionFile("deploy", "generate")
+    if (shouldUseEmergencyFallback()) {
+      return buildEmergencySessionArtifact(sessionFile, tentacleDir, this.config.logging?.logDir ?? path.join(os.homedir(), ".openceph", "logs"))
+    }
     this.acquireRun("deploy-" + path.basename(tentacleDir), sessionFile)
 
     try {
-      await this.runWithPolling({
+      return await this.runWithPolling({
         tentacleId: "deploy-" + path.basename(tentacleDir),
         sessionFile,
         prompt,
@@ -274,7 +275,7 @@ managed by OpenCeph's TentacleManager after deployment.`
 
   // ── M4: Scene 2 — Generate complete skill_tentacle from scratch ──
 
-  async generateSkillTentacle(req: Omit<CodeAgentRequirement, "skillContext">): Promise<void> {
+  async generateSkillTentacle(req: Omit<CodeAgentRequirement, "skillContext">): Promise<CodeAgentSessionArtifact> {
     const spec = await readPrompt("skill-tentacle-spec.md").catch(() => "")
     const contractSpec = await readPrompt("contract-spec.md").catch(() => "")
     const ipcTemplate = await readPrompt("ipc-client-template.py").catch(() => "")
@@ -324,25 +325,27 @@ All files must be complete, functional, and ready to deploy:
 
 After generating all files, verify syntax with:
   python3 -c "compile(open('src/main.py').read(), 'src/main.py', 'exec')"
+
+## Truthfulness Rules
+- Do not claim the tentacle is running, spawned, registered, or deployed unless you actually executed that step in this session.
+- If you only generated files, say exactly that: code generated, not running.
+- If runtime state is unknown, say it is unknown instead of guessing.
 `
 
+    const workDir = path.join(os.homedir(), ".openceph", "tentacles", req.tentacleId)
+    const sessionFile = await this.prepareSessionFile(req.tentacleId, "generate")
     if (shouldUseEmergencyFallback()) {
       // In test mode, generate minimal files
-      const workDir = path.join(os.homedir(), ".openceph", "tentacles", req.tentacleId)
       await fs.mkdir(path.join(workDir, "prompt"), { recursive: true })
       await fs.mkdir(path.join(workDir, "src"), { recursive: true })
       await fs.writeFile(path.join(workDir, "SKILL.md"), `---\nname: ${req.tentacleId}\ndescription: ${req.purpose}\nversion: 1.0.0\nmetadata:\n  openceph:\n    tentacle:\n      spawnable: true\n      runtime: python\n      entry: src/main.py\n      default_trigger: every 30 minutes\n---\n`)
       await fs.writeFile(path.join(workDir, "README.md"), `# ${req.tentacleId}\n\n## 环境变量\n\n## 部署步骤\n\n## 启动命令\npython3 src/main.py\n`)
       await fs.writeFile(path.join(workDir, "prompt", "SYSTEM.md"), `# You are ${req.tentacleId}, a tentacle for {USER_NAME}.\n\n## Mission\n${req.purpose}\n\n## Report Strategy\n${req.reportStrategy ?? "Batch report"}\n`)
-      await fs.writeFile(path.join(workDir, "src", "main.py"), `import os\nimport sys\nSOCKET_PATH = os.environ.get("OPENCEPH_SOCKET_PATH", "")\nTENTACLE_ID = os.environ.get("OPENCEPH_TENTACLE_ID", "${req.tentacleId}")\nTRIGGER_MODE = os.environ.get("OPENCEPH_TRIGGER_MODE", "self")\nprint("Emergency fallback skill_tentacle")\n`)
+      await fs.writeFile(path.join(workDir, "src", "main.py"), `import os\nimport sys\nTENTACLE_ID = os.environ.get("OPENCEPH_TENTACLE_ID", "${req.tentacleId}")\nTRIGGER_MODE = os.environ.get("OPENCEPH_TRIGGER_MODE", "self")\nprint("Emergency fallback skill_tentacle", file=sys.stderr)\n`)
       await fs.writeFile(path.join(workDir, "src", "requirements.txt"), "requests==2.31.0\npython-dotenv==1.0.0\n")
-      return
+      return buildEmergencySessionArtifact(sessionFile, workDir, this.config.logging?.logDir ?? path.join(os.homedir(), ".openceph", "logs"))
     }
-
-    const workDir = path.join(os.homedir(), ".openceph", "tentacles", req.tentacleId)
     await fs.mkdir(workDir, { recursive: true })
-
-    const sessionFile = await this.prepareSessionFile(req.tentacleId, "generate")
     this.acquireRun(req.tentacleId, sessionFile)
 
     try {
@@ -350,7 +353,7 @@ After generating all files, verify syntax with:
         tentacle_id: req.tentacleId,
         purpose: req.purpose,
       })
-      await this.runWithPolling({
+      return await this.runWithPolling({
         tentacleId: req.tentacleId,
         sessionFile,
         prompt,
@@ -366,7 +369,7 @@ After generating all files, verify syntax with:
   async fixSkillTentacle(
     tentacleDir: string,
     errors: Array<{ check?: string; message: string; file?: string; line?: number; suggestion?: string }>,
-  ): Promise<void> {
+  ): Promise<CodeAgentSessionArtifact> {
     const fixPrompt = `The previously generated skill_tentacle has validation errors. Fix them.
 
 ## Errors Found
@@ -379,19 +382,19 @@ ${errors.map((e) =>
 - Ensure IPC three contracts are fully implemented
 - Ensure prompt/SYSTEM.md and README.md exist and are complete
 - After fixing, verify syntax again
+- Do not claim the tentacle is running or deployed unless you actually ran those steps
 
 Do NOT introduce new issues while fixing existing ones.`
 
-    if (shouldUseEmergencyFallback()) {
-      return
-    }
-
     const tentacleId = path.basename(tentacleDir)
     const sessionFile = await this.prepareSessionFile(tentacleId, "fix")
+    if (shouldUseEmergencyFallback()) {
+      return buildEmergencySessionArtifact(sessionFile, tentacleDir, this.config.logging?.logDir ?? path.join(os.homedir(), ".openceph", "logs"))
+    }
     this.acquireRun(tentacleId + "-fix", sessionFile)
 
     try {
-      await this.runWithPolling({
+      return await this.runWithPolling({
         tentacleId: tentacleId + "-fix",
         sessionFile,
         prompt: fixPrompt,
@@ -607,6 +610,12 @@ Do NOT introduce new issues while fixing existing ones.`
     const { tentacleId, sessionFile, prompt, workDir, brainSessionKey, resumeSessionId, reuseReason } = options
     const polling = this.resolveClaudePollingStrategy()
     const startTime = this.now()
+    const logsDir = getCodeAgentRunLogsDir(this.config.logging?.logDir ?? path.join(os.homedir(), ".openceph", "logs"), sessionFile)
+    await fs.mkdir(logsDir, { recursive: true })
+    const streamLogs = getStreamLogPaths(logsDir)
+    const stdoutStream = createWriteStream(streamLogs.stdoutLog, { flags: "a" })
+    const stderrStream = createWriteStream(streamLogs.stderrLog, { flags: "a" })
+    const terminalStream = createWriteStream(streamLogs.terminalLog, { flags: "a" })
     let lastActivityAt = this.now()
     let turnCount = 0
     let finalText = ""
@@ -630,6 +639,18 @@ Do NOT introduce new issues while fixing existing ones.`
 
     const writer = createJsonlWriter(sessionFile)
     const appendEvent = (event: Record<string, unknown>) => writer.write(event)
+    const appendRuntimeOutput = (stream: "stdout" | "stderr" | "event", text: string) => {
+      const target = stream === "stdout" ? stdoutStream : stream === "stderr" ? stderrStream : terminalStream
+      target.write(text)
+      if (stream !== "event") {
+        const combined = text
+          .split(/(?<=\n)/)
+          .filter(Boolean)
+          .map((part) => `[${stream}] ${part}`)
+          .join("")
+        terminalStream.write(combined)
+      }
+    }
     appendEvent({
       type: "session",
       version: 4,
@@ -643,6 +664,7 @@ Do NOT introduce new issues while fixing existing ones.`
       resumed_from_claude_session_id: resumeSessionId,
       reuse_reason: reuseReason,
     })
+    appendRuntimeOutput("event", `[event] ${new Date(startTime).toISOString()} code_agent_start tentacle_id=${tentacleId} work_dir=${workDir}\n`)
 
     return await new Promise<RunWithPollingResult>((resolve, reject) => {
       if (resumeSessionId) {
@@ -676,6 +698,11 @@ Do NOT introduce new issues while fixing existing ones.`
           pollTimer = null
         }
         await writer.close()
+        await Promise.all([
+          closeStream(stdoutStream),
+          closeStream(stderrStream),
+          closeStream(terminalStream),
+        ])
         fn()
       }
 
@@ -685,6 +712,7 @@ Do NOT introduce new issues while fixing existing ones.`
           timestamp: new Date(this.now()).toISOString(),
           error: error.message,
         })
+        appendRuntimeOutput("event", `[event] ${new Date(this.now()).toISOString()} code_agent_error ${error.message}\n`)
         await finish(() => reject(error))
       }
 
@@ -808,6 +836,7 @@ Do NOT introduce new issues while fixing existing ones.`
         lastActivityAt = this.now()
         const text = chunk.toString("utf-8")
         stdoutBuffer += text
+        appendRuntimeOutput("stdout", text)
         appendEvent({
           type: "stdout",
           timestamp: new Date(lastActivityAt).toISOString(),
@@ -828,6 +857,7 @@ Do NOT introduce new issues while fixing existing ones.`
         lastActivityAt = this.now()
         const text = chunk.toString("utf-8")
         stderr += text
+        appendRuntimeOutput("stderr", text)
         appendEvent({
           type: "stderr",
           timestamp: new Date(lastActivityAt).toISOString(),
@@ -856,6 +886,7 @@ Do NOT introduce new issues while fixing existing ones.`
           result_subtype: resultPayload?.subtype,
           resumed_from_claude_session_id: resumeSessionId,
         })
+        appendRuntimeOutput("event", `[event] ${new Date(this.now()).toISOString()} code_agent_close exit_code=${code ?? "unknown"} result_subtype=${resultPayload?.subtype ?? "-"}\n`)
 
         if (settled) return
         if (code !== 0) {
@@ -903,6 +934,10 @@ Do NOT introduce new issues while fixing existing ones.`
         await finish(() => resolve({
           sessionFile,
           workDir,
+          logsDir: streamLogs.logsDir,
+          stdoutLog: streamLogs.stdoutLog,
+          stderrLog: streamLogs.stderrLog,
+          terminalLog: streamLogs.terminalLog,
           elapsedMs: completedAt - startTime,
           turnCount,
           toolCalls: Array.from(toolCalls.values()),
@@ -1211,7 +1246,7 @@ Do NOT introduce new issues while fixing existing ones.`
       "1. Generate all code directly in the current working directory using tool calls.",
       "2. Use write or edit tools to create and update files. Do not return a JSON blob of the project.",
       "3. MUST implement the IPC contract: tentacle_register on startup, consultation_request as primary reporting path, directive handling, OPENCEPH_TRIGGER_MODE support.",
-      "4. MUST read OPENCEPH_SOCKET_PATH or OPENCEPH_IPC_SOCKET and OPENCEPH_TENTACLE_ID from environment.",
+      "4. MUST read OPENCEPH_TENTACLE_ID and OPENCEPH_TRIGGER_MODE from environment and use stdin/stdout JSON Lines for IPC.",
       "5. MUST support external trigger mode. Self-schedule support is required when OPENCEPH_TRIGGER_MODE=self.",
       "6. Create requirements.txt / package.json / go.mod only if needed.",
       "7. After writing files, verify syntax with bash or language tools. Do not run npm install or pip install; the deployer handles setup.",
@@ -1489,6 +1524,29 @@ Do NOT introduce new issues while fixing existing ones.`
   }
 }
 
+function closeStream(stream: NodeJS.WritableStream): Promise<void> {
+  return new Promise((resolve) => {
+    stream.end(() => resolve())
+  })
+}
+
+function buildEmergencySessionArtifact(sessionFile: string, workDir: string, logDir: string): CodeAgentSessionArtifact {
+  const logsDir = getCodeAgentRunLogsDir(logDir, sessionFile)
+  const streamLogs = getStreamLogPaths(logsDir)
+  return {
+    sessionFile,
+    workDir,
+    logsDir: streamLogs.logsDir,
+    stdoutLog: streamLogs.stdoutLog,
+    stderrLog: streamLogs.stderrLog,
+    terminalLog: streamLogs.terminalLog,
+    elapsedMs: 0,
+    turnCount: 0,
+    toolCalls: [],
+    finalText: "emergency fallback",
+  }
+}
+
 async function readPrompt(fileName: string): Promise<string> {
   const builtPath = path.join(__dirname, "prompts", fileName)
   const sourcePath = path.join(__dirname, "..", "..", "src", "code-agent", "prompts", fileName)
@@ -1509,7 +1567,7 @@ function normalizeGeneratedCode(code: GeneratedCode, runtime: string): Generated
     runtime: code.runtime || runtime,
     files: code.files ?? [],
     setupCommands: code.setupCommands ?? [],
-    envVars: Array.from(new Set(code.envVars ?? ["OPENCEPH_SOCKET_PATH", "OPENCEPH_IPC_SOCKET", "OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"])),
+    envVars: Array.from(new Set(code.envVars ?? ["OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"])),
   }
 }
 
@@ -1637,12 +1695,7 @@ function inferDependencies(runtime: string, files: Array<{ path: string; content
 }
 
 function inferEnvVars(requirement: CodeAgentRequirement): string[] {
-  const vars = [
-    "OPENCEPH_SOCKET_PATH",
-    "OPENCEPH_IPC_SOCKET",
-    "OPENCEPH_TENTACLE_ID",
-    "OPENCEPH_TRIGGER_MODE",
-  ]
+  const vars = ["OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"]
   if (requirement.infrastructure?.needsLlm) {
     vars.push(
       "OPENCEPH_LLM_PROVIDER",
@@ -1674,24 +1727,22 @@ function sleep(ms: number): Promise<void> {
 }
 
 function buildEmergencyFallback(requirement: CodeAgentRequirement, runtime: string): GeneratedCode {
-  const envVars = ["OPENCEPH_SOCKET_PATH", "OPENCEPH_IPC_SOCKET", "OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"]
+  const envVars = ["OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"]
   if (runtime === "typescript") {
     return {
       runtime,
       files: [{
         path: "src/main.ts",
         content: `import * as crypto from "node:crypto"
-import * as net from "node:net"
+import * as readline from "node:readline"
 
-const socketPath = process.env.OPENCEPH_SOCKET_PATH ?? process.env.OPENCEPH_IPC_SOCKET ?? ""
 const triggerMode = process.env.OPENCEPH_TRIGGER_MODE ?? "external"
 const id = process.env.OPENCEPH_TENTACLE_ID ?? ${JSON.stringify(requirement.tentacleId)}
 let stopped = false
 let paused = false
-let buffer = ""
 
 function send(type: string, payload: Record<string, unknown>) {
-  socket.write(JSON.stringify({
+  process.stdout.write(JSON.stringify({
     type,
     sender: id,
     receiver: "brain",
@@ -1725,33 +1776,42 @@ function emitConsultation(reason: string, mode: "batch" | "action_confirm" = "ba
   })
 }
 
-const socket = net.createConnection(socketPath, () => {
-  send("tentacle_register", { purpose: ${JSON.stringify(requirement.purpose)}, runtime: "typescript", triggerMode })
-  emitConsultation("boot")
-})
+send("tentacle_register", { purpose: ${JSON.stringify(requirement.purpose)}, runtime: "typescript", triggerMode })
+emitConsultation("boot")
 
-socket.on("data", (chunk) => {
-  buffer += chunk.toString("utf-8")
-  const lines = buffer.split("\\n")
-  buffer = lines.pop() ?? ""
-  for (const line of lines) {
-    if (!line.trim()) continue
-    const message = JSON.parse(line)
-    if (message.type !== "directive") continue
-    const action = message.payload?.action
-    if (action === "pause") paused = true
-    if (action === "resume") paused = false
-    if (action === "run_now" && !paused) emitConsultation("run_now")
-    if (action === "consultation_followup" && !paused) emitConsultation("followup", "action_confirm")
-    if (action === "kill") {
-      stopped = true
-      socket.end(() => process.exit(0))
-    }
+const rl = readline.createInterface({ input: process.stdin })
+rl.on("line", (line) => {
+  if (!line.trim()) return
+  const message = JSON.parse(line)
+  if (message.type !== "directive") return
+  const action = message.payload?.action
+  if (action === "pause") paused = true
+  if (action === "resume") paused = false
+  if (action === "run_now" && !paused) emitConsultation("run_now")
+  if (action === "consultation_followup" && !paused) emitConsultation("followup", "action_confirm")
+  if (action === "kill") {
+    stopped = true
+    rl.close()
+    process.exit(0)
   }
 })
 
-socket.on("error", () => {
-  process.exit(stopped ? 0 : 1)
+rl.on("close", () => {
+  if (!stopped) {
+    process.exit(0)
+  }
+})
+
+process.stdin.on("error", () => {
+  if (!stopped) {
+    process.exit(1)
+  }
+})
+
+process.stdout.on("error", () => {
+  if (!stopped) {
+    process.exit(1)
+  }
 })
 
 setInterval(() => {
@@ -1780,7 +1840,6 @@ setInterval(() => {
       path: "main.py",
       content: `import json
 import os
-import socket
 import sys
 import threading
 import time
@@ -1788,24 +1847,21 @@ import uuid
 
 STOP = False
 PAUSED = False
-SOCKET_PATH = os.environ.get("OPENCEPH_SOCKET_PATH") or os.environ.get("OPENCEPH_IPC_SOCKET") or ""
 TRIGGER_MODE = os.environ.get("OPENCEPH_TRIGGER_MODE", "external")
 TENTACLE_ID = os.environ.get("OPENCEPH_TENTACLE_ID", ${JSON.stringify(requirement.tentacleId)})
 PURPOSE = ${JSON.stringify(requirement.purpose)}
 WORKFLOW = ${JSON.stringify(requirement.workflow || requirement.purpose)}
 
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(SOCKET_PATH)
-
 def send(msg_type, payload):
-    sock.sendall((json.dumps({
+    sys.stdout.write(json.dumps({
         "type": msg_type,
         "sender": TENTACLE_ID,
         "receiver": "brain",
         "payload": payload,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "message_id": str(uuid.uuid4())
-    }) + "\\n").encode("utf-8"))
+    }) + "\\n")
+    sys.stdout.flush()
 
 def emit_consultation(reason, mode="batch"):
     payload = {
@@ -1848,27 +1904,21 @@ def handle_directive(message):
             emit_consultation("followup", "action_confirm")
     elif action == "kill":
         STOP = True
-        try:
-            sock.close()
-        finally:
-            sys.exit(0)
+        sys.exit(0)
 
 def reader():
     global STOP
-    buffer = ""
-    while not STOP:
-        data = sock.recv(4096)
-        if not data:
+    for part in sys.stdin:
+        if STOP:
             break
-        buffer += data.decode("utf-8")
-        parts = buffer.split("\\n")
-        buffer = parts.pop() or ""
-        for part in parts:
-            if not part.strip():
-                continue
+        if not part.strip():
+            continue
+        try:
             message = json.loads(part)
             if message.get("type") == "directive":
                 handle_directive(message)
+        except Exception:
+            continue
 
 send("tentacle_register", {"purpose": PURPOSE, "runtime": "python", "triggerMode": TRIGGER_MODE})
 emit_consultation("boot")

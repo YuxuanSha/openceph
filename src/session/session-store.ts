@@ -64,6 +64,27 @@ export class SessionStoreManager {
     })
   }
 
+  async get(sessionKey: string): Promise<SessionEntry | undefined> {
+    return this.withLock(async () => {
+      const store = this.readStore()
+      return store[sessionKey]
+    })
+  }
+
+  async updateModel(sessionKey: string, model: string): Promise<void> {
+    return this.withLock(async () => {
+      const store = this.readStore()
+      const entry = store[sessionKey]
+      if (!entry) return
+
+      if (entry.model === model) return
+
+      entry.model = model
+      entry.updatedAt = new Date().toISOString()
+      this.writeStore(store)
+    })
+  }
+
   async updateTokens(
     sessionKey: string,
     delta: { input: number; output: number },

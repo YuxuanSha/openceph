@@ -68,7 +68,7 @@ describe("SkillSpawner", () => {
       entryCommand: "python3 main.py",
       setupCommands: [],
       dependencies: undefined,
-      envVars: ["OPENCEPH_SOCKET_PATH"],
+      envVars: ["OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"],
       description: "generated tentacle",
       diagnostics: {
         sessionFile: path.join(dir, "claude-session.jsonl"),

@@ -103,7 +103,7 @@ def _duration_text(started_at: str | None, now_text: str) -> str:
 
 def main():
     tentacle_id = os.environ.get("OPENCEPH_TENTACLE_ID", "uptime-watchdog")
-    ipc = IpcClient(os.environ["OPENCEPH_SOCKET_PATH"], tentacle_id)
+    ipc = IpcClient(tentacle_id)
     ipc.connect()
     ipc.register("Monitor websites and APIs for downtime and latency regressions.", "python")
     store = UptimeStore(BASE_DIR / "uptime-watchdog.db")

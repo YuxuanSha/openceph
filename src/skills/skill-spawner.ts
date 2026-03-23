@@ -11,6 +11,7 @@ import {
   CodeAgentTimeoutError,
   type CodeAgentRequirement,
 } from "../code-agent/code-agent.js"
+import type { CodeAgentSessionArtifact } from "../code-agent/types.js"
 import { TentacleDeployer } from "../code-agent/deployer.js"
 import { SkillLoader, type SkillTentacleConfig } from "./skill-loader.js"
 import { SkillInspector } from "./skill-inspector.js"
@@ -66,6 +67,10 @@ export interface SpawnResult {
   claudeResultSubtype?: string
   codeAgentSessionFile?: string
   codeAgentWorkDir?: string
+  codeAgentLogsDir?: string
+  codeAgentTerminalLog?: string
+  codeAgentStdoutLog?: string
+  codeAgentStderrLog?: string
   source?: string
   packagePath?: string
 }
@@ -202,6 +207,7 @@ export class SkillSpawner {
     skill: NonNullable<ReturnType<SkillLoader["get"]>>,
   ): Promise<SpawnResult> {
     const tentacleDir = path.join(this.tentacleManager.getTentacleBaseDir(), params.tentacleId)
+    let deployArtifact: CodeAgentSessionArtifact | undefined
 
     brainLogger.info("skill_tentacle_deploy_start", {
       tentacle_id: params.tentacleId,
@@ -253,7 +259,7 @@ export class SkillSpawner {
 
     // Step 4: Claude Code deploy (minimal prompt — read README.md and execute)
     try {
-      await this.codeAgent.deployExisting(tentacleDir)
+      deployArtifact = await this.codeAgent.deployExisting(tentacleDir)
     } catch (err: any) {
       await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
       brainLogger.error("skill_tentacle_deploy_failed", {
@@ -311,6 +317,12 @@ export class SkillSpawner {
       deployed: true,
       spawned: true,
       pid: spawnResult.pid,
+      codeAgentSessionFile: deployArtifact?.sessionFile,
+      codeAgentWorkDir: deployArtifact?.workDir,
+      codeAgentLogsDir: deployArtifact?.logsDir,
+      codeAgentTerminalLog: deployArtifact?.terminalLog,
+      codeAgentStdoutLog: deployArtifact?.stdoutLog,
+      codeAgentStderrLog: deployArtifact?.stderrLog,
       source: `skill_tentacle:${skill.name}`,
     }
   }
@@ -319,6 +331,7 @@ export class SkillSpawner {
 
   private async spawnFromScratch(params: SpawnParams): Promise<SpawnResult> {
     const tentacleDir = path.join(this.tentacleManager.getTentacleBaseDir(), params.tentacleId)
+    let lastCodeAgentArtifact: CodeAgentSessionArtifact | undefined
 
     brainLogger.info("tentacle_creator_generate", {
       tentacle_id: params.tentacleId,
@@ -327,7 +340,7 @@ export class SkillSpawner {
 
     // Step 1: Claude Code generates complete skill_tentacle
     try {
-      await this.codeAgent.generateSkillTentacle({
+      lastCodeAgentArtifact = await this.codeAgent.generateSkillTentacle({
         tentacleId: params.tentacleId,
         purpose: params.purpose,
         workflow: params.workflow,
@@ -380,7 +393,13 @@ export class SkillSpawner {
           errors: lastErrors,
         })
         try {
-          await this.codeAgent.fixSkillTentacle(tentacleDir, allErrors)
+          lastCodeAgentArtifact = await this.codeAgent.fixSkillTentacle(tentacleDir, allErrors)
+          brainLogger.info("tentacle_creator_fix_complete", {
+            tentacle_id: params.tentacleId,
+            attempt,
+            code_agent_session_file: lastCodeAgentArtifact.sessionFile,
+            code_agent_log_dir: lastCodeAgentArtifact.logsDir,
+          })
         } catch {
           // fix attempt failed, continue to next retry
         }
@@ -388,18 +407,43 @@ export class SkillSpawner {
     }
 
     if (lastErrors.length > 0) {
-      return {
-        success: false,
-        tentacleId: params.tentacleId,
-        errors: lastErrors,
+      const recoveryValidation = await this.revalidateGeneratedTentacle(tentacleDir, smokeTestTimeoutMs)
+      if (recoveryValidation.passed) {
+        brainLogger.warn("tentacle_creator_validation_recovered", {
+          tentacle_id: params.tentacleId,
+          previous_errors: lastErrors,
+          code_agent_session_file: lastCodeAgentArtifact?.sessionFile,
+        })
+        lastErrors = []
+      } else {
+        return {
+          success: false,
+          tentacleId: params.tentacleId,
+          errors: lastErrors,
+          codeAgentSessionFile: lastCodeAgentArtifact?.sessionFile,
+          codeAgentWorkDir: lastCodeAgentArtifact?.workDir,
+          codeAgentLogsDir: lastCodeAgentArtifact?.logsDir,
+          codeAgentTerminalLog: lastCodeAgentArtifact?.terminalLog,
+          codeAgentStdoutLog: lastCodeAgentArtifact?.stdoutLog,
+          codeAgentStderrLog: lastCodeAgentArtifact?.stderrLog,
+        }
       }
     }
 
     // Step 3: Deploy (same as scene 1 Phase C-D)
     try {
-      await this.codeAgent.deployExisting(tentacleDir)
+      lastCodeAgentArtifact = await this.codeAgent.deployExisting(tentacleDir)
     } catch (err: any) {
-      return { success: false, errors: [`部署失败：${err.message}`] }
+      return {
+        success: false,
+        errors: [`部署失败：${err.message}`],
+        codeAgentSessionFile: lastCodeAgentArtifact?.sessionFile,
+        codeAgentWorkDir: lastCodeAgentArtifact?.workDir,
+        codeAgentLogsDir: lastCodeAgentArtifact?.logsDir,
+        codeAgentTerminalLog: lastCodeAgentArtifact?.terminalLog,
+        codeAgentStdoutLog: lastCodeAgentArtifact?.stdoutLog,
+        codeAgentStderrLog: lastCodeAgentArtifact?.stderrLog,
+      }
     }
 
     const trigger = this.inferTrigger(params)
@@ -444,6 +488,12 @@ export class SkillSpawner {
       deployed: true,
       spawned: true,
       pid: spawnResult.pid,
+      codeAgentSessionFile: lastCodeAgentArtifact?.sessionFile,
+      codeAgentWorkDir: lastCodeAgentArtifact?.workDir,
+      codeAgentLogsDir: lastCodeAgentArtifact?.logsDir,
+      codeAgentTerminalLog: lastCodeAgentArtifact?.terminalLog,
+      codeAgentStdoutLog: lastCodeAgentArtifact?.stdoutLog,
+      codeAgentStderrLog: lastCodeAgentArtifact?.stderrLog,
       packagePath,
       source: "generated",
     }
@@ -578,7 +628,18 @@ export class SkillSpawner {
       claudeResultSubtype: generated.diagnostics?.resultSubtype,
       codeAgentSessionFile: lastSessionFile,
       codeAgentWorkDir: lastWorkDir,
+      codeAgentLogsDir: generated.diagnostics?.logsDir,
+      codeAgentTerminalLog: generated.diagnostics?.terminalLog,
+      codeAgentStdoutLog: generated.diagnostics?.stdoutLog,
+      codeAgentStderrLog: generated.diagnostics?.stderrLog,
     }
+  }
+
+  private async revalidateGeneratedTentacle(tentacleDir: string, smokeTestTimeoutMs: number): Promise<{ passed: boolean }> {
+    const freshValidator = new TentacleValidator()
+    freshValidator.setSmokeTestTimeoutMs(smokeTestTimeoutMs)
+    const validation = await freshValidator.validateSkillTentacle(tentacleDir)
+    return { passed: validation.passed }
   }
 
   // ── User config injection (scene 1) ──
@@ -599,8 +660,6 @@ export class SkillSpawner {
     }
 
     // OpenCeph auto-injected variables
-    setEnv("OPENCEPH_IPC_SOCKET", this.config.tentacle.ipcSocketPath)
-    setEnv("OPENCEPH_SOCKET_PATH", this.config.tentacle.ipcSocketPath)
     setEnv("OPENCEPH_TENTACLE_ID", path.basename(tentacleDir))
     setEnv("OPENCEPH_TRIGGER_MODE", "self")
 
@@ -640,7 +699,7 @@ export class SkillSpawner {
       const missingSummary = missingRequiredEnv
         .map((missing) => {
           const primaryCredential = this.getPrimaryCredentialCandidate(missing.envVar)
-          return `${missing.envVar}（请设置 ${missing.envVar} 或写入 credentials/${primaryCredential}）`
+          return `${missing.envVar}（请运行 openceph credentials set ${primaryCredential} <value>，或设置环境变量 ${missing.envVar}）`
         })
         .join("，")
       throw new Error(`skill_tentacle 缺少必需环境变量：${missingSummary}`)
@@ -864,7 +923,7 @@ export class SkillSpawner {
       const value = await this.resolveRequiredEnvValue(envVar)
       if (!value) {
         const primaryCredential = this.getPrimaryCredentialCandidate(envVar)
-        errors.push(`skill_tentacle ${skillName} 缺少必需环境变量：${envVar}（请设置 ${envVar} 或写入 credentials/${primaryCredential}）`)
+        errors.push(`skill_tentacle ${skillName} 缺少必需环境变量：${envVar}（请运行 openceph credentials set ${primaryCredential} <value>，或设置环境变量 ${envVar}）`)
       }
     }
 

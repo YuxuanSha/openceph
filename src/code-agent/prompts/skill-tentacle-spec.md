@@ -50,7 +50,7 @@ Must be self-explanatory for Claude Code deployment:
 
 ## IPC Three Contracts (src/ must implement)
 
-1. **Register**: Connect to OPENCEPH_SOCKET_PATH → send `tentacle_register`
+1. **Register**: Start stdin listener → send `tentacle_register` to stdout
 2. **Report**: Batch findings via `consultation_request` (mode: batch/single/action_confirm)
 3. **Directives**: Handle `directive` messages (pause/resume/kill/run_now)
 

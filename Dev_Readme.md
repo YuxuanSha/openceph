@@ -102,6 +102,23 @@ CLI 入口点，使用 Commander.js 实现所有命令行接口：
 - 定义完整的配置 schema（使用 Zod）
 - 包含：gateway、channels、agents、models、auth、mcp、session、cron、heartbeat、push、tentacle、skills、logging、cost 等配置项
 
+补充：
+- `tentacle.model` / `tentacle.models` / `tentacle.providers` / `tentacle.auth` 组成触手独立运行时配置
+- 触手模型解析逻辑在 `src/config/model-runtime.ts`
+- 业务代码开发在仓库内完成，但运行时配置来源仍然是 `~/.openceph/openceph.json`
+
+#### 配置迁移经验（2026-03 Hotfix）
+
+当用户已经运行过多轮旧版本、`~/.openceph/agents/**/sessions.json` 中残留旧模型、或 `state/` 与当前源码行为不一致时，推荐的运维动作不是直接修旧目录，而是：
+
+1. 停掉当前 `start` 进程
+2. 整体备份 `~/.openceph/`
+3. 重新执行 `openceph init`
+4. 用 `credentials set` 恢复 OpenRouter / 飞书等关键凭据
+5. 只编辑新生成的 `~/.openceph/openceph.json`
+
+这条流程应该写进所有运维/排障 SOP，因为它能同时规避旧 `sessions/`、旧 `state/`、旧模板、旧触手部署目录带来的串扰。
+
 #### [credential-store.ts](src/config/credential-store.ts)
 - 凭据存储和管理
 - 支持从文件、环境变量、macOS Keychain 读取凭据
@@ -159,6 +176,22 @@ Brain 类的完整实现，主要功能：
 - **跨 session 双写**：consultation 来源推送在真正投递时写入主 session
 - **日/周回顾**：自动执行回顾任务
 
+#### 模型选择 Hotfix（2026-03）
+
+这一轮修复后，Brain 的模型选择逻辑有两个重要变化：
+
+- `handleMessage()` 不再直接信任一个全局 `currentModel` 作为所有会话的默认来源，而是先按 `sessionKey` 解析该 session 当前选中的模型
+- 当 `sessionKey` 或模型变化时，会丢弃内存中的旧 Pi session，并按新的 transcript / model 重建 session
+
+这样做的原因是：旧实现会把“当前模型”做成进程级全局状态，导致 A 会话通过 `/model` 切换后，B 会话也被连带切换；同时 `sessions.json` 中的 `model` 元数据可能与真实会话使用的模型脱节。
+
+当前实现约束：
+
+- `~/.openceph/openceph.json` 中的 `agents.defaults.model.primary` 是默认模型来源
+- `/model` 只影响当前 session
+- `SessionStoreManager.updateModel()` 会把当前 session 选中的模型写回 `~/.openceph/agents/<agent>/sessions/sessions.json`
+- Brain 的自动 failover 不再直接把 session 从一个模型静默切到另一个模型；默认需要显式 `/model`
+
 **关键方法：**
 ```typescript
 class Brain {
@@ -189,6 +222,49 @@ class Brain {
 - `push-message-merger.ts`：运行时合并连续 assistant 消息
 - `compaction-guard.ts`：压缩保护扩展
 
+#### 主动推送链路补充
+
+Phase 7 后，触手推送链路不再只是“调用 Gateway 发消息”，而是完整经过：
+
+1. 触手通过 `consultation_request` 向大脑上报
+2. 大脑在 consultation / cron session 中决定是否调用 `send_to_user`
+3. `send_to_user` 在 consultation 来源下执行跨 session 双写
+4. 消息写入主 session transcript，metadata 标记为 `tentacle_push`
+5. Gateway 立即投递，或进入 `best_time` / `morning_digest` 队列
+6. API 调用前由 `push-message-merger` 合并连续 assistant 消息，避免上下文格式冲突
+
+这意味着“用户回复触手推送内容”时，大脑能在主 session 中自然看到那条历史推送。
+
+### 4.1 触手部署链路 Hotfix（Phase 8）
+
+这轮修复的重点不是新增产品能力，而是把原先不通的触手链路打通：
+
+- IPC 协议统一为 `stdin/stdout JSON Lines`
+  运行时在 `src/tentacle/manager.ts` 用 `stdio: ["pipe","pipe","pipe"]` 启动触手
+  `src/tentacle/ipc-server.ts` 现在优先解析子进程 stdout，并通过 stdin 下发 directive
+- `.env` / credentials 解析修复
+  `src/skills/skill-spawner.ts` 不再把 `OPENROUTER_API_KEY` 机械映射成错误路径
+  缺失必需凭据时直接阻止启动并返回友好错误
+- 代码部署路径修复
+  `src/code-agent/deployer.ts` 改成部署前清空旧目录（保留 `.env` / `data` / 日志）
+  部署后会校验入口文件真实存在，避免 workdir 与 runtime dir 脱节
+
+这三个点是之前 HN / arXiv 需求在日志里不断 fallback 到 cron 的直接根因。
+
+### 4.2 运行状态与日志 Hotfix（2026-03）
+
+这一轮又补了两类基础设施约束：
+
+- **状态语义硬分离**
+  `generated`、`deployed`、`spawned`、`registered/running` 必须视为不同阶段
+  `src/brain/system-prompt.ts`、`src/brain/brain.ts`、workspace `AGENTS.md` 都新增了“禁止把 deployed 说成 running”的规则
+- **日志目录重构**
+  Ceph / Gateway / code-agent 迁移到 `~/.openceph/agents/<agent>/logs/`
+  触手迁移到 `~/.openceph/tentacles/<tentacle_id>/logs/`
+  code-agent 单次运行现在额外生成 `runs/<session>/stdout.log`、`stderr.log`、`terminal.log`
+
+这次修复的目标不是换一套日志框架，而是把“谁的日志写到哪里”彻底收口，方便定位 HN 这类孵化/运行问题。
+
 #### [loop-detection.ts](src/brain/loop-detection.ts)
 - 检测工具调用循环
 - 防止无限循环
@@ -213,6 +289,12 @@ class Brain {
 - `deliverToUser()`：向用户发送消息
 - `start()`/`stop()`：启动/停止网关
 
+补充说明（2026-03）：
+
+- `gateway_start` 只代表渠道插件初始化成功，并不等于每个渠道都一定暴露同一个端口
+- WebChat 实际监听端口以 `channel_start` 日志中的 `webchat.port` 为准
+- 如果运维脚本只检查 `runtime-status.json.gateway.port`，可能会误判当前实际可连接的 WebChat 端口；排障时应同时看 `gateway-*.log`
+
 #### [router.ts](src/gateway/router.ts)
 - 消息路由器
 - 决定消息如何被处理
@@ -220,6 +302,18 @@ class Brain {
 #### [session-manager.ts](src/gateway/session-manager.ts)
 - Session 解析和解析器
 - 管理会话键（sessionKey）
+
+#### [session-store.ts](src/session/session-store.ts)
+- 持久化 `sessions.json`
+- 保存 session transcript 路径、token 统计、origin，以及当前 session 选中的模型
+
+2026-03 之后，这里的 `model` 字段语义建议明确理解为：
+
+- 不是“系统全局当前模型”
+- 不是“Pi transcript 中最后一次 message_complete 的 provider/model 快照”
+- 而是“这个 session 下一轮应该继续使用的选中模型”
+
+这也是 README 中“不要直接修旧 sessions.json，优先重建 `~/.openceph/`”的根本原因：旧版本留下的 `model` 字段可能并不可靠
 
 #### [message-queue.ts](src/gateway/message-queue.ts)
 - 消息队列管理
@@ -259,6 +353,41 @@ class Brain {
 - 本地 CLI 对话适配器
 - 使用 readline 实现交互
 
+---
+
+## 触手开发注意事项
+
+### 1. 运行时协议
+
+- 新触手统一使用 `stdin/stdout JSON Lines`
+- `stdout` 只能输出 IPC 消息，业务日志必须写 `stderr`
+- `OPENCEPH_TENTACLE_ID` 和 `OPENCEPH_TRIGGER_MODE` 由运行时注入
+- 不要再在新代码里依赖 `OPENCEPH_SOCKET_PATH` / `OPENCEPH_IPC_SOCKET`
+
+### 2. 配置来源
+
+- 不能直接把运行时密钥写进仓库
+- 触手依赖的 provider / auth / model 由 `~/.openceph/openceph.json` 中的 `tentacle.*` 配置控制
+- skill_tentacle 的自定义字段和必需环境变量由 `SkillSpawner.injectUserConfig()` 注入到运行目录 `.env`
+
+### 3. 内置触手
+
+`builtin-tentacles/` 下的触手现在可以作为 phase7 的参考实现：
+
+- `hn-radar`
+- `arxiv-paper-scout`
+- `github-release-watcher`
+- `daily-digest-curator`
+- `price-alert-monitor`
+- `uptime-watchdog`
+- `skill-tentacle-creator`
+
+其中 HN / arXiv 两个 builtin 已补齐：
+
+- `stdin/stdout` IPC 客户端
+- `pause` / `resume` / `kill` / `run_now` 指令处理
+- 与主 session 的 consultation → push 全链路兼容
+
 #### [channel-plugin.ts](src/gateway/adapters/channel-plugin.ts)
 - 渠道插件接口定义
 - 定义所有渠道插件必须实现的接口
@@ -280,6 +409,16 @@ class Brain {
 | [cron.ts](src/gateway/commands/cron.ts) | /cron |
 
 ---
+
+#### `/model` 行为补充
+
+当前版本里 `/model` 的预期行为是：
+
+- 不带参数时，读取当前 `sessionKey` 对应的选中模型
+- `/model status` 返回当前 session 的模型，而不是 Brain 进程上一次处理过的其他会话模型
+- `/model <provider/model>` 会重置当前 session transcript，并把新的模型选择写回该 session 的 `sessions.json`
+
+如果未来需要支持“全局默认模型切换”，应该显式设计成另一条命令，而不是复用 `/model`
 
 ### 8. 工具系统 (`src/tools/`)
 
@@ -365,6 +504,8 @@ class ToolRegistry {
 - 进程 Spawn/Stop/Restart
 - IPC 通信
 - 健康度跟踪
+- 新版会把触手 `stdout` / `stderr` / `terminal` 统一写入 `~/.openceph/tentacles/<id>/logs/`
+- `resume()` 现在允许“已知但当前未运行”的触手重新 spawn，而不再要求进程还留在内存表里
 
 **关键方法：**
 ```typescript
@@ -516,6 +657,8 @@ class PushDecisionEngine {
 - 动态创建新技能
 - 支持从 skill_tentacle 目录 / `.tentacle` 包部署
 - 支持 builtin/community skill_tentacle 的复制、注入配置、部署和孵化
+- 从零生成路径现在会在最终失败前做一次 fresh validator 复核，避免“磁盘已修好但主流程仍按失败收口”
+- 返回值会携带最近一次 code-agent session / workdir / logs 路径，便于排查孵化链路
 
 #### [skill-inspector.ts](src/skills/skill-inspector.ts)
 - 技能检查器
@@ -528,6 +671,9 @@ class PushDecisionEngine {
 #### [code-agent.ts](src/code-agent/code-agent.ts)
 - 代码执行代理
 - 使用 Claude Code 执行代码
+- `invoke_code_agent` 的语义现在明确为“生成/部署代码”，默认不会暗示“已经运行”
+- `generateSkillTentacle()` / `fixSkillTentacle()` / `deployExisting()` 现在都会返回 session artifact，包含 session file、workdir、logs 路径
+- `runWithPolling()` 现在把每次 code-agent 运行的完整 `stdout/stderr/terminal` 流落到 `~/.openceph/agents/code-agent/logs/runs/<session>/`
 
 #### [deployer.ts](src/code-agent/deployer.ts)
 - 代码部署器
@@ -548,10 +694,12 @@ class PushDecisionEngine {
 
 #### [index.ts](src/logger/index.ts)
 - 导出所有日志器
+- 初始化时会把 brain / gateway / code-agent / tentacle 的事件日志分别路由到各自目录
 
 #### [create-logger.ts](src/logger/create-logger.ts)
 - 日志创建器
 - Winston 日志配置
+- 现在会在创建 DailyRotateFile 之前确保目录存在，避免首次写日志时因为父目录缺失而失败
 
 #### 各日志器文件
 
@@ -563,6 +711,15 @@ class PushDecisionEngine {
 | [cost-logger.ts](src/logger/cost-logger.ts) | API 调用成本日志 |
 | [tentacle-logger.ts](src/logger/tentacle-logger.ts) | 触手日志 |
 | [cache-trace-logger.ts](src/logger/cache-trace-logger.ts) | Prompt Cache 命中记录 |
+
+补充：
+
+- `brain-logger.ts` 现在写入 `~/.openceph/agents/ceph/logs/events-<date>.log`
+- `gateway-logger.ts` 现在写入 `~/.openceph/agents/gateway/logs/events-<date>.log`
+- `code-agent-logger.ts` 现在写入 `~/.openceph/agents/code-agent/logs/events-<date>.log`
+- `tentacle-logger.ts` 现在写入 `~/.openceph/tentacles/<id>/logs/events-<date>.log`
+- `process-runtime-capture.ts` 负责把 Ceph 主进程 stdout/stderr 同步写入 `stdout.log`、`stderr.log`、`terminal.log`
+- `log-paths.ts` 统一计算 `agents/` 与 `tentacles/` 下的日志路径
 
 #### [runtime-status-store.ts](src/logger/runtime-status-store.ts)
 - 运行时状态存储
@@ -879,6 +1036,28 @@ tail -f ~/.openceph/logs/gateway-$(date +%F).log
 
 # 系统日志
 tail -f ~/.openceph/logs/system-$(date +%F).log
+```
+
+补充（2026-03 推荐排障路径）：
+
+```bash
+# Ceph 主进程事件日志
+tail -f ~/.openceph/agents/ceph/logs/events-$(date +%F).log
+
+# Ceph 主进程完整终端流
+tail -f ~/.openceph/agents/ceph/logs/terminal.log
+
+# code-agent 事件日志
+tail -f ~/.openceph/agents/code-agent/logs/events-$(date +%F).log
+
+# code-agent 某次运行的完整终端流
+ls ~/.openceph/agents/code-agent/logs/runs/
+tail -f ~/.openceph/agents/code-agent/logs/runs/<session>/terminal.log
+
+# 某个触手自己的日志
+ls ~/.openceph/tentacles/<tentacle_id>/logs/
+tail -f ~/.openceph/tentacles/<tentacle_id>/logs/terminal.log
+tail -f ~/.openceph/tentacles/<tentacle_id>/logs/events-$(date +%F).log
 ```
 
 ### 检查状态

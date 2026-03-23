@@ -67,6 +67,14 @@ npm run start -- init
 └── state/           # 状态文件
 ```
 
+补充（2026-03 Runtime 日志布局）：
+
+- `~/.openceph/agents/ceph/logs/`：Ceph / Brain 主进程日志，包含 `events-<date>.log`、`stdout.log`、`stderr.log`、`terminal.log`
+- `~/.openceph/agents/code-agent/logs/`：code-agent 结构化事件日志；每次实际运行还会在 `runs/<session>/` 下生成对应 `stdout/stderr/terminal` 日志
+- `~/.openceph/agents/gateway/logs/`：Gateway 结构化事件日志
+- `~/.openceph/tentacles/<tentacle_id>/logs/`：触手自己的完整运行日志目录；新版本不再把触手主日志混放到全局 `~/.openceph/logs/`
+- `~/.openceph/logs/` 仍保留系统级日志（如 `system`、`cost`、`cache-trace` 等）
+
 首次 `init` 默认会把以下内置触手复制到 `~/.openceph/skills/`：
 
 - `skill-tentacle-creator`
@@ -76,6 +84,36 @@ npm run start -- init
 - `arxiv-paper-scout`
 - `price-alert-monitor`
 - `uptime-watchdog`
+
+### 2.1 重建 `~/.openceph/` 的推荐流程
+
+如果你已经有一套历史运行目录，并且怀疑其中的 `sessions/`、`state/`、旧版模板或旧版模型配置已经污染当前运行时，推荐不要直接在旧目录上反复修补，而是按下面的流程重建：
+
+```bash
+# 1. 先停掉当前 OpenCeph 进程
+pkill -f 'src/cli.ts start' || true
+pkill -f 'tsx watch src/cli.ts' || true
+
+# 2. 整体备份旧目录（不要只备份某一个 sessions.json）
+mv ~/.openceph ~/.openceph_backups/openceph-$(date +%Y%m%d-%H%M%S)
+
+# 3. 重新初始化一个全新的运行目录
+npm run dev -- init
+
+# 4. 用 credentials 子命令把旧环境中的关键凭据恢复到新环境
+npm run dev -- credentials set openrouter <YOUR_OPENROUTER_KEY>
+npm run dev -- credentials set feishu_app_id <YOUR_FEISHU_APP_ID>
+npm run dev -- credentials set feishu_app_secret <YOUR_FEISHU_APP_SECRET>
+
+# 5. 只编辑新的 ~/.openceph/openceph.json
+npm run dev -- start
+```
+
+经验上，下面几类问题最适合用这条流程处理：
+
+- `~/.openceph/agents/**/sessions.json` 中残留旧模型，和当前 `openceph.json` 不一致
+- 曾经运行过旧版 OpenCeph，目录里还保留着旧会话、旧触手部署物或旧状态文件
+- 你要从一套历史 Claude 配置整体迁移到新的 Gemini / OpenRouter 配置
 
 ### 3. 配置 API Key
 
@@ -195,6 +233,196 @@ npm run dev -- credentials list
 - `chat` 是单独的 CLI 模式，不需要在 `channels` 里配置 `cli`
 - `builtinTentacles` 控制 `init` / `upgrade` 时 builtin tentacle 的安装和更新策略
 - `push` 控制主动推送的默认窗口、晨报兜底时间和每日限制
+
+### 4.0 推荐的 Gemini 3 Flash + 飞书配置
+
+如果你希望大脑和触手都统一走 OpenRouter 的 Gemini 3 Flash，并且启用飞书/WebChat/CLI，可以直接参考下面这份配置：
+
+```json5
+{
+  gateway: {
+    port: 18790,
+    bind: "loopback",
+    auth: { mode: "token", token: "from:credentials/gateway_token" }
+  },
+
+  models: {
+    providers: {
+      openrouter: {
+        baseUrl: "https://openrouter.ai/api/v1",
+        api: "openai-completions",
+        models: [
+          {
+            id: "google/gemini-3-flash-preview",
+            name: "Google Gemini 3 Flash Preview",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: {
+              input: 0.5,
+              output: 3,
+              cacheRead: 0.125,
+              cacheWrite: 0
+            },
+            contextWindow: 1000000,
+            maxTokens: 65536
+          }
+        ]
+      }
+    }
+  },
+
+  agents: {
+    defaults: {
+      workspace: "/Users/didi/.openclaw/workspace",
+      model: {
+        primary: "openrouter/google/gemini-3-flash-preview",
+        fallbacks: []
+      },
+      models: {
+        "openrouter/google/gemini-3-flash-preview": {
+          alias: "Gemini 3 Flash",
+          params: {
+            temperature: 0.4
+          }
+        }
+      },
+      thinkingDefault: "medium",
+      contextPruning: {
+        mode: "cache-ttl",
+        ttl: "5m",
+        minPrunableToolChars: 50000
+      },
+      compaction: {
+        mode: "safeguard",
+        reserveTokensFloor: 32000,
+        memoryFlush: {
+          softThresholdTokens: 850000
+        }
+      }
+    }
+  },
+
+  auth: {
+    profiles: {
+      "openrouter:primary": {
+        mode: "api_key",
+        apiKey: "from:credentials/openrouter"
+      }
+    },
+    order: { openrouter: ["openrouter:primary"] }
+  },
+
+  channels: {
+    telegram: { enabled: false },
+    feishu: {
+      enabled: true,
+      appId: "from:credentials/feishu_app_id",
+      appSecret: "from:credentials/feishu_app_secret",
+      domain: "feishu",
+      dmPolicy: "pairing",
+      proxyMode: "inherit"
+    },
+    webchat: { enabled: true },
+    cli: { enabled: true }
+  },
+
+  tentacle: {
+    ipcSocketPath: "~/.openceph/openceph.sock",
+    model: {
+      primary: "openrouter/google/gemini-3-flash-preview",
+      fallbacks: []
+    },
+    models: {
+      "openrouter/google/gemini-3-flash-preview": {
+        alias: "Gemini 3 Flash",
+        params: {
+          temperature: 0.4
+        }
+      }
+    },
+    providers: {
+      openrouter: {
+        baseUrl: "https://openrouter.ai/api/v1",
+        api: "openai-completions"
+      }
+    },
+    auth: {
+      profiles: {
+        "openrouter:tentacle": {
+          mode: "api_key",
+          apiKey: "from:credentials/openrouter"
+        }
+      },
+      order: { openrouter: ["openrouter:tentacle"] }
+    }
+  }
+}
+```
+
+### 4.0.1 会话模型行为（重要）
+
+从当前版本开始，模型选择遵循下面的规则：
+
+- 默认模型以 `~/.openceph/openceph.json` 中的 `agents.defaults.model.primary` 为准
+- `/model <provider/model>` 只切换当前 session，不再影响其他 session
+- `~/.openceph/agents/<agent>/sessions/sessions.json` 中的 `model` 字段表示“该 session 当前选中的模型”
+- 如果一个 session 还没有发生过正式对话，对应的 `sessions/` 目录和 `sessions.json` 可能还不会创建，这是正常现象
+- 默认不应在没有用户明确切换模型的情况下，悄悄从 Gemini 跳到 Claude
+
+因此，当你看到：
+
+- `openceph.json` 是 Gemini
+- 但某个旧的 `sessions.json` 仍然是 Claude
+
+更合理的处理方式通常不是继续改旧 `sessions.json`，而是使用上面的“重建 `~/.openceph/` 推荐流程”。
+
+补充说明：
+
+- 触手运行时现在使用 `stdin/stdout JSON Lines` 与大脑通信，不再依赖 `.env` 中的 `OPENCEPH_SOCKET_PATH` / `OPENCEPH_IPC_SOCKET`
+- `tentacle.ipcSocketPath` 仍然保留在配置中，主要用于 OpenCeph 本地目录布局和旧版本兼容；新内置触手不会直接读取它
+- 触手所需的模型、provider、auth、API key 优先从 `~/.openceph/openceph.json` 的 `tentacle.model` / `tentacle.models` / `tentacle.providers` / `tentacle.auth` 解析
+- `.env` 只写入触手自身需要的业务变量、`OPENCEPH_TENTACLE_ID`、`OPENCEPH_TRIGGER_MODE`，以及从 credentials 解析出的必需密钥
+- 如果某个 builtin / skill_tentacle 声明了必需环境变量但当前 credentials 中缺失，`spawn_from_skill` 会直接返回明确错误，而不是启动后反复 crash
+
+### 4.1 触手链路诊断
+
+如果你看到日志里 HN / arXiv 需求最后退化成 cron job，而不是按预期孵化触手，通常是下面几类问题叠加导致的：
+
+- 旧版模板仍按 Unix socket 生成触手代码，和当前运行时不匹配
+- `.env` 注入没有正确从 credentials 解析必需变量，触手启动后立即缺 key 退出
+- 代码生成目录与真实运行目录不同步，导致看上去“生成成功”，实际启动的仍是旧代码
+
+本版本已经修复这三条主链路：
+
+- 触手运行时、validator、代码生成 prompt、内置 builtin tentacles 全部统一到 `stdin/stdout JSON Lines`
+- `spawn_from_skill` 会在部署前校验必需 env，并给出 `openceph credentials set <key> <value>` 级别的明确提示
+- deployer 改成全量覆盖同步到 `~/.openceph/tentacles/<tentacle_id>/`，并校验入口文件存在
+
+### 4.1.1 运行状态语义补充（2026-03）
+
+为了避免“代码已经生成”被误报成“触手已经在后台运行”，当前系统把下面几个状态明确分开：
+
+- `generated`：只表示代码已经生成
+- `deployed`：只表示代码已经复制到运行目录并完成依赖部署
+- `spawned`：只表示子进程已经被 `TentacleManager.spawn()` 拉起
+- `registered` / `running`：只表示触手已完成 IPC 注册，进入受管运行态
+
+因此：
+
+- `invoke_code_agent` 默认只保证 `generated/deployed`
+- 只有返回值里明确出现 `spawned=true`，才可以对用户说“已经启动”
+- `spawn_from_skill` 的返回值现在会附带 `runtime_status` 和下一步说明，避免把 `deployed` 误读成 `running`
+
+### 4.2 内置 HN / arXiv 触手
+
+`hn-radar` 和 `arxiv-paper-scout` 现在都按 phase7 预期走完整触手链路：
+
+- 以 builtin skill_tentacle 形式安装到 `~/.openceph/skills/`
+- 运行时通过 IPC 向大脑发送 `consultation_request`
+- 由大脑在 consultation session 中决定是否 `send_to_user`
+- 投递时写入主 session transcript，并通过 Gateway 推送到用户渠道
+
+这两个内置触手也已经补齐了 `pause` / `resume` / `kill` / `run_now` 指令处理。
 
 ### 5. 启动
 
@@ -575,6 +803,15 @@ push: {
 | `cost.log` | API 调用成本日志 |
 | `cache-trace.jsonl` | Prompt Cache 命中记录 |
 
+补充（2026-03 新日志布局）：
+
+- Ceph / Brain 主进程：`~/.openceph/agents/ceph/logs/`
+- Gateway：`~/.openceph/agents/gateway/logs/`
+- Code Agent 结构化事件：`~/.openceph/agents/code-agent/logs/events-<日期>.log`
+- Code Agent 单次运行完整终端流：`~/.openceph/agents/code-agent/logs/runs/<session>/terminal.log`
+- 触手完整运行日志：`~/.openceph/tentacles/<tentacle_id>/logs/`
+- 旧版本触手可能仍然保留 `runtime/` 目录；重启或重新孵化后会迁移到 `logs/`
+
 ## 开发
 
 ```bash
@@ -779,6 +1016,24 @@ tail -50 ~/.openceph/logs/brain-$(date +%F).log
 # 查看会话 transcript（包含完整的 API 请求/响应）
 ls ~/.openceph/agents/ceph/sessions/
 cat ~/.openceph/agents/ceph/sessions/<SESSION_ID>.jsonl
+```
+
+补充（2026-03 推荐查看方式）：
+
+```bash
+# 查看 Ceph 主进程结构化事件日志
+tail -50 ~/.openceph/agents/ceph/logs/events-$(date +%F).log
+
+# 查看 Ceph 主进程完整终端流
+tail -50 ~/.openceph/agents/ceph/logs/terminal.log
+
+# 查看 code-agent 事件日志
+tail -50 ~/.openceph/agents/code-agent/logs/events-$(date +%F).log
+
+# 查看某个触手的完整运行日志
+ls ~/.openceph/tentacles/<tentacle_id>/logs/
+tail -50 ~/.openceph/tentacles/<tentacle_id>/logs/terminal.log
+tail -50 ~/.openceph/tentacles/<tentacle_id>/logs/events-$(date +%F).log
 ```
 
 ---

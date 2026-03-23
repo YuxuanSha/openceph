@@ -1,12 +1,14 @@
 import winston from "winston"
 import { createLogger } from "./create-logger.js"
 import * as path from "path"
+import { getAgentLogsDir } from "./log-paths.js"
 
 let logger: winston.Logger | null = null
 
 export function initBrainLogger(logDir: string, level: string, maxSizeMb: number, keepDays: number): void {
+  const brainLogDir = getAgentLogsDir(logDir, "ceph")
   logger = createLogger({
-    filename: path.join(logDir, "brain-%DATE%.log"),
+    filename: path.join(brainLogDir, "events-%DATE%.log"),
     level,
     maxSize: `${maxSizeMb}m`,
     maxFiles: `${keepDays}d`,

@@ -1,6 +1,7 @@
 import { setupGlobalProxy } from "./config/proxy-setup.js"
 import { loadConfig } from "./config/config-loader.js"
 import { initLoggers, systemLogger } from "./logger/index.js"
+import { initProcessRuntimeCapture } from "./logger/process-runtime-capture.js"
 import { createPiContext } from "./pi/pi-context.js"
 import { Brain } from "./brain/brain.js"
 import { McpBridge } from "./mcp/mcp-bridge.js"
@@ -28,6 +29,7 @@ export async function startOpenCeph(): Promise<void> {
 
   // 1. Load config
   const config = loadConfig()
+  initProcessRuntimeCapture(config.logging.logDir, "ceph")
 
   // 2. Init loggers
   initLoggers(config)

@@ -48,7 +48,7 @@ def build_items(store: PriceStore) -> list[dict]:
 
 def main():
     tentacle_id = os.environ.get("OPENCEPH_TENTACLE_ID", "price-alert-monitor")
-    ipc = IpcClient(os.environ["OPENCEPH_SOCKET_PATH"], tentacle_id)
+    ipc = IpcClient(tentacle_id)
     ipc.connect()
     ipc.register("Monitor configured targets for price changes.", "python")
     store = PriceStore(BASE_DIR / "price-alert-monitor.db")

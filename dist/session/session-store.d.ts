@@ -19,6 +19,8 @@ export declare class SessionStoreManager {
     get storePath(): string;
     getTranscriptPath(sessionId: string): string;
     getOrCreate(sessionKey: string, meta?: Partial<Pick<SessionEntry, "model" | "origin">>): Promise<SessionEntry>;
+    get(sessionKey: string): Promise<SessionEntry | undefined>;
+    updateModel(sessionKey: string, model: string): Promise<void>;
     updateTokens(sessionKey: string, delta: {
         input: number;
         output: number;

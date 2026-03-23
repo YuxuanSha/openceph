@@ -1,7 +1,6 @@
 import { execFile } from "child_process"
 import { existsSync } from "fs"
 import * as fs from "fs/promises"
-import * as net from "net"
 import * as os from "os"
 import * as path from "path"
 import type { GeneratedCode, ValidationError } from "./code-agent.js"
@@ -211,13 +210,15 @@ export class TentacleValidator {
     const aggregate = code.files.map((file) => file.content).join("\n")
     const errors: ValidationError[] = []
     const warnings: string[] = []
+    const hasLegacySocketContract = aggregate.includes("OPENCEPH_SOCKET_PATH") || aggregate.includes("OPENCEPH_IPC_SOCKET")
+    const hasStdoutTransport = /sys\.stdout|process\.stdout|stdout\.write|console\.log\(/.test(aggregate)
+    const hasStdinTransport = /sys\.stdin|process\.stdin|stdin\.on\(|readline\.createInterface\(\{[^}]*input:\s*process\.stdin/.test(aggregate)
 
-    // Required: connect to canonical socket env
-    if (!aggregate.includes("OPENCEPH_SOCKET_PATH") && !aggregate.includes("OPENCEPH_IPC_SOCKET")) {
+    if (!hasLegacySocketContract && !(hasStdoutTransport && hasStdinTransport)) {
       errors.push({
         check: "contract",
-        message: "Missing OPENCEPH_SOCKET_PATH / OPENCEPH_IPC_SOCKET connection — tentacle must connect to the IPC socket",
-        suggestion: "Connect to the Unix socket specified by OPENCEPH_SOCKET_PATH (preferred) or OPENCEPH_IPC_SOCKET",
+        message: "Missing IPC transport implementation — tentacle must communicate over stdin/stdout JSON Lines",
+        suggestion: "Write JSON lines to stdout and read directives from stdin (legacy socket compatibility is optional)",
       })
     }
 
@@ -366,9 +367,8 @@ export class TentacleValidator {
 
   async smokeTest(code: GeneratedCode): Promise<CheckResult> {
     const dir = await materialize(code)
-    let socketPath: string | null = null
-    let server: net.Server | null = null
     let registered = false
+    let stderr = ""
 
     try {
       // 1. Run setup commands (timeout 60s)
@@ -388,53 +388,40 @@ export class TentacleValidator {
         }
       }
 
-      // 2. Create mock Unix socket
-      socketPath = path.join(dir, "test.sock")
-      server = await createMockSocket(socketPath, (data) => {
-        try {
-          const msg = JSON.parse(data)
-          if (msg.type === "tentacle_register") {
-            registered = true
-          }
-        } catch {}
-      })
-
-      // 3. Start tentacle (timeout 5s)
+      // 2. Start tentacle (timeout 5s)
       const env = {
         ...process.env,
-        OPENCEPH_SOCKET_PATH: socketPath,
-        OPENCEPH_IPC_SOCKET: socketPath,
         OPENCEPH_TENTACLE_ID: "smoke_test",
         OPENCEPH_TRIGGER_MODE: "external",
       }
 
       const child = await import("child_process").then((cp) =>
-        cp.spawn("bash", ["-lc", code.entryCommand], { cwd: dir, env, stdio: "pipe" })
+        cp.spawn("bash", ["-lc", code.entryCommand], { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] })
       )
+      attachStdoutRegisterProbe(child.stdout, () => {
+        registered = true
+      })
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString("utf-8")
+      })
 
-      // 4. Wait for registration (5s max)
+      // 3. Wait for registration (5s max)
       const startTime = Date.now()
       while (!registered && Date.now() - startTime < 5000) {
         await new Promise((r) => setTimeout(r, 200))
       }
 
-      // 5. Send kill directive
-      if (server) {
-        const killMsg = JSON.stringify({
-          type: "directive",
-          sender: "brain",
-          receiver: "smoke_test",
-          payload: { action: "kill" },
-          timestamp: new Date().toISOString(),
-          message_id: "smoke-kill",
-        }) + "\n"
-        // Send to all connected clients
-        for (const conn of (server as any).__connections ?? []) {
-          try { conn.write(killMsg) } catch {}
-        }
-      }
+      // 4. Send kill directive
+      child.stdin.write(JSON.stringify({
+        type: "directive",
+        sender: "brain",
+        receiver: "smoke_test",
+        payload: { action: "kill" },
+        timestamp: new Date().toISOString(),
+        message_id: "smoke-kill",
+      }) + "\n")
 
-      // 6. Wait for exit
+      // 5. Wait for exit
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           child.kill("SIGTERM")
@@ -451,7 +438,7 @@ export class TentacleValidator {
           passed: false,
           errors: [{
             check: "smoke",
-            message: "Tentacle did not send tentacle_register within 5 seconds",
+            message: `Tentacle did not send tentacle_register within 5 seconds${stderr.trim() ? `; stderr: ${stderr.trim().slice(-300)}` : ""}`,
             suggestion: "Ensure the tentacle sends tentacle_register immediately after connecting",
           }],
           warnings: [],
@@ -464,18 +451,12 @@ export class TentacleValidator {
         passed: false,
         errors: [{
           check: "smoke",
-          message: `Smoke test failed: ${error instanceof Error ? error.message : String(error)}`,
+          message: `Smoke test failed: ${error instanceof Error ? error.message : String(error)}${stderr.trim() ? `; stderr: ${stderr.trim().slice(-300)}` : ""}`,
           suggestion: "Ensure the tentacle can start and register within 5 seconds",
         }],
         warnings: [],
       }
     } finally {
-      if (server) {
-        server.close()
-      }
-      if (socketPath) {
-        try { await fs.unlink(socketPath) } catch {}
-      }
       await fs.rm(dir, { recursive: true, force: true })
     }
   }
@@ -490,9 +471,8 @@ export class TentacleValidator {
     setupCommands: string[],
     timeoutMs: number,
   ): Promise<CheckResult> {
-    let socketPath: string | null = null
-    let server: net.Server | null = null
     let registered = false
+    let stderr = ""
 
     try {
       // Run setup commands if any (e.g., pip install) — skip if venv already exists
@@ -514,26 +494,21 @@ export class TentacleValidator {
         }
       }
 
-      // Create mock socket in a temp location
-      socketPath = path.join(os.tmpdir(), `openceph-smoke-${Date.now()}.sock`)
-      server = await createMockSocket(socketPath, (data) => {
-        try {
-          const msg = JSON.parse(data)
-          if (msg.type === "tentacle_register") registered = true
-        } catch {}
-      })
-
       const env = {
         ...process.env,
-        OPENCEPH_SOCKET_PATH: socketPath,
-        OPENCEPH_IPC_SOCKET: socketPath,
         OPENCEPH_TENTACLE_ID: "smoke_test",
         OPENCEPH_TRIGGER_MODE: "external",
       }
 
       const child = await import("child_process").then((cp) =>
-        cp.spawn("bash", ["-lc", entryCommand], { cwd: dir, env, stdio: "pipe" })
+        cp.spawn("bash", ["-lc", entryCommand], { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] })
       )
+      attachStdoutRegisterProbe(child.stdout, () => {
+        registered = true
+      })
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString("utf-8")
+      })
 
       // Wait for registration within timeout
       const startTime = Date.now()
@@ -541,20 +516,14 @@ export class TentacleValidator {
         await new Promise((r) => setTimeout(r, 200))
       }
 
-      // Send kill directive
-      if (server) {
-        const killMsg = JSON.stringify({
-          type: "directive",
-          sender: "brain",
-          receiver: "smoke_test",
-          payload: { action: "kill" },
-          timestamp: new Date().toISOString(),
-          message_id: "smoke-kill",
-        }) + "\n"
-        for (const conn of (server as any).__connections ?? []) {
-          try { conn.write(killMsg) } catch {}
-        }
-      }
+      child.stdin.write(JSON.stringify({
+        type: "directive",
+        sender: "brain",
+        receiver: "smoke_test",
+        payload: { action: "kill" },
+        timestamp: new Date().toISOString(),
+        message_id: "smoke-kill",
+      }) + "\n")
 
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => { child.kill("SIGTERM"); resolve() }, 2000)
@@ -566,7 +535,7 @@ export class TentacleValidator {
           passed: false,
           errors: [{
             check: "smoke",
-            message: `Tentacle did not send tentacle_register within ${timeoutMs}ms`,
+            message: `Tentacle did not send tentacle_register within ${timeoutMs}ms${stderr.trim() ? `; stderr: ${stderr.trim().slice(-300)}` : ""}`,
             suggestion: "Ensure the tentacle sends tentacle_register immediately after connecting",
           }],
           warnings: [],
@@ -579,16 +548,12 @@ export class TentacleValidator {
         passed: false,
         errors: [{
           check: "smoke",
-          message: `Smoke test failed: ${error instanceof Error ? error.message : String(error)}`,
+          message: `Smoke test failed: ${error instanceof Error ? error.message : String(error)}${stderr.trim() ? `; stderr: ${stderr.trim().slice(-300)}` : ""}`,
           suggestion: "Ensure the tentacle can start and register",
         }],
         warnings: [],
       }
     } finally {
-      if (server) server.close()
-      if (socketPath) {
-        try { await fs.unlink(socketPath) } catch {}
-      }
     }
   }
 }
@@ -620,28 +585,28 @@ function run(command: string, args: string[], cwd: string, timeoutMs = 30_000): 
   })
 }
 
-function createMockSocket(socketPath: string, onData: (data: string) => void): Promise<net.Server> {
-  return new Promise((resolve, reject) => {
-    const connections: net.Socket[] = []
-    const server = net.createServer((conn) => {
-      connections.push(conn)
-      let buffer = ""
-      conn.on("data", (chunk) => {
-        buffer += chunk.toString()
-        const lines = buffer.split("\n")
-        buffer = lines.pop() ?? ""
-        for (const line of lines) {
-          if (line.trim()) onData(line)
+function attachStdoutRegisterProbe(
+  stdout: NodeJS.ReadableStream | null,
+  onRegister: () => void,
+): void {
+  if (!stdout) return
+  let buffer = ""
+  stdout.on("data", (chunk) => {
+    buffer += chunk.toString()
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) continue
+      try {
+        const message = JSON.parse(line)
+        if (message?.type === "tentacle_register") {
+          onRegister()
         }
-      })
-      conn.on("close", () => {
-        const idx = connections.indexOf(conn)
-        if (idx >= 0) connections.splice(idx, 1)
-      })
-    })
-    ;(server as any).__connections = connections
-    server.on("error", reject)
-    server.listen(socketPath, () => resolve(server))
+      } catch {
+        // ignore non-JSON stdout lines
+      }
+    }
   })
 }
 

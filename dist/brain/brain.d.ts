@@ -57,6 +57,7 @@ export declare class Brain {
     private config;
     private piCtx;
     private currentSessionKey;
+    private activeSessionId;
     private currentModel;
     private lastActiveChannel;
     private lastActiveSenderId;
@@ -107,6 +108,7 @@ export declare class Brain {
     resetSession(newModel?: string, sessionKey?: string): Promise<void>;
     shutdown(): Promise<void>;
     get model(): string;
+    getSelectedModel(sessionKey?: string): Promise<string>;
     get thinkingLevel(): ThinkingLevel;
     get reasoningMode(): boolean;
     listTentacles(): ReturnType<TentacleManager["listAll"]>;

@@ -1,11 +1,13 @@
 # OpenCeph Tentacle IPC Contract Specification
 
-The tentacle must communicate with the OpenCeph brain over JSON Lines IPC on a Unix socket.
+The tentacle must communicate with the OpenCeph brain over stdin/stdout JSON Lines IPC.
 
 ## Connection
 
-Connect to the Unix domain socket at `OPENCEPH_SOCKET_PATH` environment variable.
-All messages are JSON objects, one per line (newline-delimited).
+- Write one JSON object per line to `stdout` to send a message to the brain
+- Read one JSON object per line from `stdin` to receive directives and replies
+- Log output must go to `stderr`, never mix logs into `stdout`
+- Do not use Unix sockets, TCP, or HTTP for tentacle IPC
 
 ## Message Format
 

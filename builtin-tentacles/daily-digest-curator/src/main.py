@@ -14,7 +14,7 @@ RUN_NOW = threading.Event()
 
 def main():
     tentacle_id = os.environ.get("OPENCEPH_TENTACLE_ID", "daily-digest-curator")
-    ipc = IpcClient(os.environ["OPENCEPH_SOCKET_PATH"], tentacle_id)
+    ipc = IpcClient(tentacle_id)
     ipc.connect()
     ipc.register("Curate pending findings into a daily digest.", "python")
 

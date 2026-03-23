@@ -91,13 +91,11 @@ python src/main.py
 
     fs.writeFileSync(path.join(skillDir, "src", "main.py"), `import os
 import json
-import socket
-
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(os.environ["OPENCEPH_SOCKET_PATH"])
+import sys
 
 def send(t, payload):
-    sock.sendall((json.dumps({"type": t, "sender": os.environ["OPENCEPH_TENTACLE_ID"], "receiver": "brain", "payload": payload}) + "\\n").encode())
+    sys.stdout.write(json.dumps({"type": t, "sender": os.environ["OPENCEPH_TENTACLE_ID"], "receiver": "brain", "payload": payload}) + "\\n")
+    sys.stdout.flush()
 
 send("tentacle_register", {"purpose": "test", "runtime": "python"})
 
@@ -109,20 +107,20 @@ while True:
     fs.writeFileSync(path.join(skillDir, "src", "ipc_client.py"), `"""IPC client for communicating with the OpenCeph brain."""
 import os
 import json
-import socket
+import sys
 
 class IpcClient:
     def __init__(self):
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect(os.environ["OPENCEPH_SOCKET_PATH"])
+        pass
 
     def send(self, msg_type, payload):
-        self.sock.sendall((json.dumps({
+        sys.stdout.write(json.dumps({
             "type": msg_type,
             "sender": os.environ.get("OPENCEPH_TENTACLE_ID", "unknown"),
             "receiver": "brain",
             "payload": payload
-        }) + "\\n").encode())
+        }) + "\\n")
+        sys.stdout.flush()
 `)
 
     fs.writeFileSync(path.join(skillDir, "src", "requirements.txt"), "requests>=2.28.0\n")

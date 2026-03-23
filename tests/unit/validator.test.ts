@@ -11,7 +11,7 @@ describe("TentacleValidator", () => {
       description: "test shell tentacle",
       files: [{
         path: "main.sh",
-        content: '#!/usr/bin/env bash\nOPENCEPH_SOCKET_PATH=$1\necho tentacle_register\necho consultation_request\necho directive\necho OPENCEPH_TRIGGER_MODE\n',
+        content: '#!/usr/bin/env bash\necho process.stdin\necho process.stdout\necho tentacle_register\necho consultation_request\necho directive\necho OPENCEPH_TRIGGER_MODE\n',
       }],
     })
     // Syntax, contract, security should all pass

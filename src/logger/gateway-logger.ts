@@ -1,12 +1,14 @@
 import winston from "winston"
 import { createLogger } from "./create-logger.js"
 import * as path from "path"
+import { getAgentLogsDir } from "./log-paths.js"
 
 let logger: winston.Logger | null = null
 
 export function initGatewayLogger(logDir: string, level: string, maxSizeMb: number, keepDays: number): void {
+  const gatewayLogDir = getAgentLogsDir(logDir, "gateway")
   logger = createLogger({
-    filename: path.join(logDir, "gateway-%DATE%.log"),
+    filename: path.join(gatewayLogDir, "events-%DATE%.log"),
     level,
     maxSize: `${maxSizeMb}m`,
     maxFiles: `${keepDays}d`,

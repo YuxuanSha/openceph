@@ -53,12 +53,15 @@ describe("TentacleManager", () => {
     const tentacleDir = manager.getTentacleDir("t1")
     fs.mkdirSync(tentacleDir, { recursive: true })
     fs.writeFileSync(path.join(tentacleDir, "register.mjs"), `
-      import * as net from 'node:net';
-      const socket = net.createConnection(${JSON.stringify(path.join(dir, "sock"))});
-      socket.on('connect', () => {
-        socket.write(JSON.stringify({type:'tentacle_register',sender:'t1',receiver:'brain',payload:{purpose:'test',runtime:'node'},timestamp:new Date().toISOString(),message_id:'1'})+'\\n');
-        setInterval(() => {}, 1000);
+      import * as readline from 'node:readline';
+      process.stderr.write('booting\\n');
+      process.stdout.write(JSON.stringify({type:'tentacle_register',sender:'t1',receiver:'brain',payload:{purpose:'test',runtime:'node'},timestamp:new Date().toISOString(),message_id:'1'})+'\\n');
+      const rl = readline.createInterface({ input: process.stdin });
+      rl.on('line', (line) => {
+        const msg = JSON.parse(line);
+        if (msg.type === 'directive' && msg.payload?.action === 'kill') process.exit(0);
       });
+      setInterval(() => {}, 1000);
     `)
     fs.writeFileSync(path.join(tentacleDir, "tentacle.json"), JSON.stringify({
       tentacleId: "t1",
@@ -70,7 +73,11 @@ describe("TentacleManager", () => {
 
     await manager.spawn("t1")
     expect(await manager.waitForRegistration("t1", 3000)).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 200))
     expect(manager.getStatus("t1")?.status).toBe("running")
+    expect(fs.readFileSync(path.join(tentacleDir, "logs", "stdout.log"), "utf-8")).toContain("tentacle_register")
+    expect(fs.readFileSync(path.join(tentacleDir, "logs", "stderr.log"), "utf-8")).toContain("booting")
+    expect(fs.readFileSync(path.join(tentacleDir, "logs", "terminal.log"), "utf-8")).toContain("[stderr] booting")
     expect(await manager.pause("t1")).toBe(true)
     expect(manager.getStatus("t1")?.status).toBe("paused")
     expect(await manager.resume("t1")).toBe(true)
@@ -131,7 +138,7 @@ describe("TentacleManager", () => {
     fs.mkdirSync(tentacleDir, { recursive: true })
     fs.writeFileSync(path.join(tentacleDir, "register.mjs"), `
       import * as fs from 'node:fs';
-      import * as net from 'node:net';
+      import * as readline from 'node:readline';
       fs.writeFileSync(${JSON.stringify(dumpPath)}, JSON.stringify({
         openrouterKey: process.env.OPENROUTER_API_KEY,
         openrouterModel: process.env.OPENROUTER_MODEL,
@@ -139,11 +146,13 @@ describe("TentacleManager", () => {
         llmModel: process.env.OPENCEPH_LLM_MODEL,
         llmParams: process.env.OPENCEPH_LLM_PARAMS_JSON,
       }, null, 2));
-      const socket = net.createConnection(process.env.OPENCEPH_SOCKET_PATH);
-      socket.on('connect', () => {
-        socket.write(JSON.stringify({type:'tentacle_register',sender:'t_model_env',receiver:'brain',payload:{purpose:'test',runtime:'node'},timestamp:new Date().toISOString(),message_id:'1'})+'\\n');
-        setInterval(() => {}, 1000);
+      process.stdout.write(JSON.stringify({type:'tentacle_register',sender:'t_model_env',receiver:'brain',payload:{purpose:'test',runtime:'node'},timestamp:new Date().toISOString(),message_id:'1'})+'\\n');
+      const rl = readline.createInterface({ input: process.stdin });
+      rl.on('line', (line) => {
+        const msg = JSON.parse(line);
+        if (msg.type === 'directive' && msg.payload?.action === 'kill') process.exit(0);
       });
+      setInterval(() => {}, 1000);
     `)
     fs.writeFileSync(path.join(tentacleDir, "tentacle.json"), JSON.stringify({
       tentacleId: "t_model_env",
@@ -164,6 +173,52 @@ describe("TentacleManager", () => {
     expect(envDump.llmParams).toBe("{\"temperature\":0.4}")
 
     expect(await manager.kill("t_model_env", "test")).toBe(true)
+    await ipc.stop()
+  })
+
+  it("resumes a known tentacle by spawning it again when no process is running", async () => {
+    const socketPath = path.join(dir, "sock-resume")
+    const ipc = new IpcServer(socketPath)
+    await ipc.start()
+    const manager = new TentacleManager(
+      {
+        tentacle: { ipcSocketPath: socketPath, crashRestartMaxAttempts: 3 },
+      } as any,
+      ipc,
+      new TentacleRegistry(path.join(dir, "workspace")),
+      new PendingReportsQueue(path.join(dir, "pending.json")),
+    )
+
+    const tentacleDir = manager.getTentacleDir("t_resume")
+    fs.mkdirSync(tentacleDir, { recursive: true })
+    fs.writeFileSync(path.join(tentacleDir, "register.mjs"), `
+      import * as readline from 'node:readline';
+      process.stdout.write(JSON.stringify({type:'tentacle_register',sender:'t_resume',receiver:'brain',payload:{purpose:'resume-test',runtime:'node'},timestamp:new Date().toISOString(),message_id:'1'})+'\\n');
+      const rl = readline.createInterface({ input: process.stdin });
+      rl.on('line', (line) => {
+        const msg = JSON.parse(line);
+        if (msg.type === 'directive' && msg.payload?.action === 'kill') process.exit(0);
+      });
+      setInterval(() => {}, 1000);
+    `)
+    fs.writeFileSync(path.join(tentacleDir, "tentacle.json"), JSON.stringify({
+      tentacleId: "t_resume",
+      purpose: "resume-test",
+      runtime: "node",
+      entryCommand: "node register.mjs",
+      cwd: tentacleDir,
+    }))
+
+    await manager.spawn("t_resume")
+    expect(await manager.waitForRegistration("t_resume", 3000)).toBe(true)
+    expect(await manager.kill("t_resume", "test")).toBe(true)
+    expect(manager.getStatus("t_resume")?.status).toBe("killed")
+
+    expect(await manager.resume("t_resume")).toBe(true)
+    expect(await manager.waitForRegistration("t_resume", 3000)).toBe(true)
+    expect(manager.getStatus("t_resume")?.status).toBe("running")
+
+    await manager.kill("t_resume", "cleanup")
     await ipc.stop()
   })
 })

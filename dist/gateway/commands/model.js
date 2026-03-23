@@ -1,7 +1,7 @@
 export const modelCommand = {
     async execute(args, ctx) {
         if (args.length === 0) {
-            return `Current model: ${ctx.brain.model}`;
+            return `Current model: ${await ctx.brain.getSelectedModel(ctx.sessionKey)}`;
         }
         if (args[0] === "list") {
             const primary = ctx.config.agents.defaults.model.primary;
@@ -13,11 +13,11 @@ export const modelCommand = {
             return lines.join("\n");
         }
         if (args[0] === "status") {
-            return `Model: ${ctx.brain.model}\nAPI mode: api_key`;
+            return `Model: ${await ctx.brain.getSelectedModel(ctx.sessionKey)}\nAPI mode: api_key`;
         }
         // Switch model
         const newModel = args[0];
-        await ctx.brain.resetSession(newModel);
+        await ctx.brain.resetSession(newModel, ctx.sessionKey);
         return `Model switched to: ${newModel}`;
     },
 };

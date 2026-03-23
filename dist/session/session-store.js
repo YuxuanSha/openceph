@@ -40,6 +40,25 @@ export class SessionStoreManager {
             return entry;
         });
     }
+    async get(sessionKey) {
+        return this.withLock(async () => {
+            const store = this.readStore();
+            return store[sessionKey];
+        });
+    }
+    async updateModel(sessionKey, model) {
+        return this.withLock(async () => {
+            const store = this.readStore();
+            const entry = store[sessionKey];
+            if (!entry)
+                return;
+            if (entry.model === model)
+                return;
+            entry.model = model;
+            entry.updatedAt = new Date().toISOString();
+            this.writeStore(store);
+        });
+    }
     async updateTokens(sessionKey, delta) {
         return this.withLock(async () => {
             const store = this.readStore();

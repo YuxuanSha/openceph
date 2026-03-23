@@ -1,6 +1,9 @@
 import winston from "winston";
 import DailyRotateFile from "winston-daily-rotate-file";
+import { mkdirSync } from "fs";
+import * as path from "path";
 export function createLogger(options) {
+    mkdirSync(path.dirname(options.filename), { recursive: true });
     const transport = new DailyRotateFile({
         filename: options.filename,
         datePattern: "YYYY-MM-DD",

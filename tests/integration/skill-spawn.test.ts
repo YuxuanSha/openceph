@@ -46,11 +46,10 @@ describe("integration: skill spawn", () => {
     fs.mkdirSync(path.join(productDir, "scripts"), { recursive: true })
     fs.writeFileSync(path.join(productDir, "SKILL.md"), `---\nname: producthunt-monitor\ndescription: monitor PH\nversion: 1.0.0\nspawnable: true\nruntime: python\nentry: scripts/monitor.py\ndefault_trigger: every 6 hours\n---\n`)
     fs.writeFileSync(path.join(productDir, "scripts", "monitor.py"), `
-import json, os, socket, time, uuid
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(os.environ["OPENCEPH_SOCKET_PATH"])
+import json, os, sys, time, uuid
 def send(t, payload):
-  sock.sendall((json.dumps({"type":t,"sender":os.environ["OPENCEPH_TENTACLE_ID"],"receiver":"brain","payload":payload,"timestamp":"x","message_id":str(uuid.uuid4())})+"\\n").encode("utf-8"))
+  sys.stdout.write(json.dumps({"type":t,"sender":os.environ["OPENCEPH_TENTACLE_ID"],"receiver":"brain","payload":payload,"timestamp":"x","message_id":str(uuid.uuid4())})+"\\n")
+  sys.stdout.flush()
 send("tentacle_register", {"purpose":"ph monitor","runtime":"python"})
 time.sleep(0.2)
 send("report_finding", {"findingId":"ph1","summary":"new launch","confidence":0.9})

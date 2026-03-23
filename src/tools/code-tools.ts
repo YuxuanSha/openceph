@@ -24,7 +24,7 @@ export function createCodeTools(opts: {
   const invokeCodeAgent: ToolDefinition = {
     name: "invoke_code_agent",
     label: "Invoke Code Agent",
-    description: "生成并落盘新的触手代码（完整 Agent 系统），完成后立即返回 Claude Code 结果",
+    description: "生成并落盘新的触手代码（完整 Agent 系统），不会自动宣称已运行；只有 spawned=true 时才表示已启动",
     parameters: Type.Object({
       tentacle_id: Type.String(),
       purpose: Type.String({ description: "触手使命" }),
@@ -100,6 +100,9 @@ export function createCodeTools(opts: {
           directory,
           deployed: Boolean(directory),
           spawned: false,
+          runtime_status: "not_running",
+          requires_explicit_run_confirmation: true,
+          next_step: "代码已生成/部署；如需运行，必须再执行显式 spawn 或 manage_tentacle resume/run_now，并检查 spawned/running 状态。",
           description: generated.description,
           reused_previous_session: generated.diagnostics?.reusedPreviousSession ?? false,
           reuse_reason: generated.diagnostics?.reuseReason ?? "new_session",
@@ -112,6 +115,10 @@ export function createCodeTools(opts: {
           claude_result_subtype: generated.diagnostics?.resultSubtype,
           code_agent_session_file: generated.diagnostics?.sessionFile,
           code_agent_work_dir: generated.diagnostics?.workDir,
+          code_agent_log_dir: generated.diagnostics?.logsDir,
+          code_agent_terminal_log: generated.diagnostics?.terminalLog,
+          code_agent_stdout_log: generated.diagnostics?.stdoutLog,
+          code_agent_stderr_log: generated.diagnostics?.stderrLog,
           generated_files: generated.files.map((file) => ({
             path: file.path,
             location: directory ? `${directory}/${file.path}` : undefined,

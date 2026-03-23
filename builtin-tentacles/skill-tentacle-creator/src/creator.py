@@ -171,8 +171,7 @@ def collect_findings() -> list[dict]:
 
 def main():
     tentacle_id = os.environ.get("OPENCEPH_TENTACLE_ID", "{name}")
-    socket_path = os.environ["OPENCEPH_SOCKET_PATH"]
-    ipc = IpcClient(socket_path, tentacle_id)
+    ipc = IpcClient(tentacle_id)
     ipc.connect()
     ipc.register("{purpose}", "python")
 

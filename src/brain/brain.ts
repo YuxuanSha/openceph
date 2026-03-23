@@ -95,6 +95,7 @@ export class Brain {
   private config: OpenCephConfig
   private piCtx: PiContext
   private currentSessionKey: string = ""
+  private activeSessionId: string = ""
   private currentModel: string
   private lastActiveChannel: string = "cli"
   private lastActiveSenderId: string = "local"
@@ -349,6 +350,9 @@ export class Brain {
     md += `- 如果没有实际调用过 web_search，绝不能声称"已经搜过了"\n`
     md += `- 搜索结果直接在回复中总结，不需要再调用 send_to_user\n`
     md += `- web_fetch 不执行 JS，JS 重度页面需注意\n`
+    md += `- 调用 invoke_code_agent / spawn_from_skill 后，必须按 tool result 原样区分 generated、deployed、spawned、running，禁止把 deployed 说成已运行\n`
+    md += `- 只有 tool result 明确给出 spawned=true 或运行态证据时，才能说"已启动/后台运行"\n`
+    md += `- 只能引用 tool result 或状态系统返回的真实日志路径，禁止臆造 logs/ 目录\n`
 
     await fs.writeFile(toolsMdPath, md, "utf-8")
   }
@@ -377,6 +381,7 @@ export class Brain {
       await this.recordFeedbackForRecentPush(input.channel, input.senderId, feedbackSignal)
     }
 
+    const selectedModel = await this.getSelectedModel(input.sessionKey)
     const output = await this.executeTurn({
       text: input.text,
       channel: input.channel,
@@ -385,7 +390,7 @@ export class Brain {
       isDm: input.isDm,
       onTextDelta: input.onTextDelta,
       mode: "full",
-      model: this.currentModel,
+      model: selectedModel,
       thinkingLevel: input.thinkingLevelOverride,
       reasoningEnabled: input.reasoningEnabledOverride,
     })
@@ -454,6 +459,7 @@ export class Brain {
       model,
       origin: { channel: "cron", senderId: "cron:system" },
     })
+    await cronSessionStore.updateModel(params.sessionKey, model)
     const customTools = this.toolRegistry.getPiTools()
     const session = await createBrainSession(this.piCtx, this.config, {
       sessionFilePath: cronSessionStore.getTranscriptPath(sessionEntry.sessionId),
@@ -545,11 +551,30 @@ export class Brain {
       model: params.model,
       origin: { channel: params.channel, senderId: params.senderId },
     })
+    const sessionChanged =
+      this.currentSessionKey !== params.sessionKey || this.activeSessionId !== sessionEntry.sessionId
+    const modelChanged = this.currentModel !== params.model
+    if (sessionChanged || modelChanged) {
+      this.session = null
+      this.totalInputTokens = sessionEntry.inputTokens
+      this.totalOutputTokens = sessionEntry.outputTokens
+    }
     this.currentSessionKey = params.sessionKey
-    const failoverDecision = this.modelFailover.checkContextLimit(this.totalInputTokens + this.totalOutputTokens, this.currentModel)
+    this.activeSessionId = sessionEntry.sessionId
+    this.currentModel = params.model
+    await this.sessionStore.updateModel(params.sessionKey, params.model)
+
+    const failoverDecision = this.modelFailover.checkContextLimit(
+      this.totalInputTokens + this.totalOutputTokens,
+      params.model,
+    )
     if (failoverDecision.action === "switch" && failoverDecision.suggestedModel) {
-      this.currentModel = failoverDecision.suggestedModel
-      params.model = failoverDecision.suggestedModel
+      brainLogger.info("model_failover_suppressed", {
+        session_key: params.sessionKey,
+        current_model: params.model,
+        suggested_model: failoverDecision.suggestedModel,
+        reason: failoverDecision.reason,
+      })
     }
 
     const systemPrompt = await this.buildSystemPrompt({
@@ -736,14 +761,24 @@ export class Brain {
   }
 
   async resetSession(newModel?: string, sessionKey?: string): Promise<void> {
-    if (newModel) this.currentModel = newModel
     const key = sessionKey || this.currentSessionKey
+    let resetEntry
     if (key) {
-      await this.sessionStore.reset(key, "manual")
+      await this.sessionStore.getOrCreate(key, {
+        model: newModel ?? this.config.agents.defaults.model.primary,
+      })
+      if (newModel) {
+        await this.sessionStore.updateModel(key, newModel)
+      }
+      resetEntry = await this.sessionStore.reset(key, "manual")
     }
-    this.session = null
-    this.totalInputTokens = 0
-    this.totalOutputTokens = 0
+    if (!key || key === this.currentSessionKey) {
+      this.session = null
+      this.activeSessionId = resetEntry?.sessionId ?? ""
+      this.totalInputTokens = 0
+      this.totalOutputTokens = 0
+      this.currentModel = resetEntry?.model ?? newModel ?? this.config.agents.defaults.model.primary
+    }
     brainLogger.info("session_reset", {
       session_key: key,
       new_model: this.currentModel,
@@ -759,6 +794,15 @@ export class Brain {
 
   get model(): string {
     return this.currentModel
+  }
+
+  async getSelectedModel(sessionKey?: string): Promise<string> {
+    const key = sessionKey?.trim() || this.currentSessionKey
+    if (!key) {
+      return this.config.agents.defaults.model.primary
+    }
+    const entry = await this.sessionStore.get(key)
+    return entry?.model ?? this.config.agents.defaults.model.primary
   }
 
   get thinkingLevel(): ThinkingLevel {
@@ -916,12 +960,11 @@ export class Brain {
       const totalTokens = this.totalInputTokens + this.totalOutputTokens
       const failoverDecision = this.modelFailover.checkContextLimit(totalTokens, this.currentModel)
       if (failoverDecision.action === "switch" && failoverDecision.suggestedModel) {
-        this.currentModel = failoverDecision.suggestedModel
-        brainLogger.info("model_failover_after_compact", {
-          new_model: this.currentModel,
+        brainLogger.info("model_failover_after_compact_suppressed", {
+          current_model: this.currentModel,
+          suggested_model: failoverDecision.suggestedModel,
           reason: failoverDecision.reason,
         })
-        return `Compacted session. Tokens before: ${result.tokensBefore}. Switched to ${this.currentModel} due to context pressure.`
       }
 
       return `Compacted session. Tokens before: ${result.tokensBefore}.`
@@ -948,11 +991,7 @@ export class Brain {
    */
   checkAndFailover(): FailoverDecision {
     const totalTokens = this.totalInputTokens + this.totalOutputTokens
-    const decision = this.modelFailover.checkContextLimit(totalTokens, this.currentModel)
-    if (decision.action === "switch" && decision.suggestedModel) {
-      this.currentModel = decision.suggestedModel
-    }
-    return decision
+    return this.modelFailover.checkContextLimit(totalTokens, this.currentModel)
   }
 
   private async writeRuntimeStatus(): Promise<void> {

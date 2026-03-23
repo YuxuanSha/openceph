@@ -20,6 +20,7 @@ export class TentacleDeployer {
   async deploy(tentacleId: string, code: GeneratedCode, metadata?: DeployMetadata): Promise<string> {
     const targetDir = path.join(this.baseDir, tentacleId)
     await fs.mkdir(targetDir, { recursive: true })
+    await clearDirectoryExcept(targetDir, new Set([".env", "data", "tentacle.json", "tentacle.log", "deploy.log"]))
     const deployLogPath = path.join(targetDir, "deploy.log")
 
     // Write all generated files
@@ -49,6 +50,19 @@ export class TentacleDeployer {
 
     await fs.writeFile(path.join(targetDir, "generated-code.json"), JSON.stringify(code, null, 2), "utf-8")
 
+    const entryPath = resolveEntryRelativePath(code.entryCommand)
+    if (entryPath) {
+      const fullEntryPath = path.join(targetDir, entryPath)
+      try {
+        await fs.access(fullEntryPath)
+      } catch {
+        const files = await listFiles(targetDir)
+        throw new Error(
+          `部署失败：入口文件 ${entryPath} 不存在于 ${targetDir}。实际文件：${files.join(", ") || "(empty)"}`,
+        )
+      }
+    }
+
     // Write tentacle.json metadata
     await fs.writeFile(path.join(targetDir, "tentacle.json"), JSON.stringify({
       tentacleId,
@@ -74,6 +88,41 @@ export class TentacleDeployer {
 
     return targetDir
   }
+}
+
+async function clearDirectoryExcept(targetDir: string, preserve: Set<string>): Promise<void> {
+  const entries = await fs.readdir(targetDir, { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) {
+    if (preserve.has(entry.name)) continue
+    await fs.rm(path.join(targetDir, entry.name), { recursive: true, force: true })
+  }
+}
+
+function resolveEntryRelativePath(entryCommand: string): string | null {
+  const candidates = entryCommand
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => /\.(py|ts|js|go|sh)$/.test(part))
+
+  return candidates.at(-1) ?? null
+}
+
+async function listFiles(targetDir: string): Promise<string[]> {
+  const files: string[] = []
+  const walk = async (dir: string, prefix = ""): Promise<void> => {
+    const entries = await fs.readdir(dir, { withFileTypes: true })
+    for (const entry of entries) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+      if (entry.isDirectory()) {
+        await walk(path.join(dir, entry.name), rel)
+      } else {
+        files.push(rel)
+      }
+    }
+  }
+  await walk(targetDir)
+  return files.sort()
 }
 
 function buildScheduleConfig(trigger?: string): TentacleScheduleConfig {

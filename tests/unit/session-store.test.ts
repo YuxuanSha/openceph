@@ -79,6 +79,23 @@ describe("SessionStoreManager", () => {
     expect(entry.totalTokens).toBe(450)
   })
 
+  it("updateModel persists the selected model for a session", async () => {
+    await mgr.getOrCreate("agent:ceph:main", { model: "openrouter/google/gemini-3-flash-preview" })
+
+    await mgr.updateModel("agent:ceph:main", "openrouter/google/gemini-3-flash-preview")
+
+    const entry = await mgr.get("agent:ceph:main")
+    expect(entry?.model).toBe("openrouter/google/gemini-3-flash-preview")
+  })
+
+  it("reset preserves the selected model for the session", async () => {
+    await mgr.getOrCreate("agent:ceph:main", { model: "openrouter/google/gemini-3-flash-preview" })
+
+    const entry = await mgr.reset("agent:ceph:main", "manual")
+
+    expect(entry.model).toBe("openrouter/google/gemini-3-flash-preview")
+  })
+
   it("concurrent updateTokens are safe", async () => {
     await mgr.getOrCreate("agent:ceph:main")
 

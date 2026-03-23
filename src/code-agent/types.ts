@@ -1,6 +1,10 @@
 export interface CodeAgentSessionArtifact {
   sessionFile: string
   workDir: string
+  logsDir?: string
+  stdoutLog?: string
+  stderrLog?: string
+  terminalLog?: string
   elapsedMs: number
   turnCount: number
   toolCalls: Array<{

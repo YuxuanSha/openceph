@@ -1,6 +1,6 @@
 import json
 import os
-import socket
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -20,16 +20,11 @@ def load_dotenv(base_dir: str) -> None:
 
 
 class IpcClient:
-    def __init__(self, socket_path: str, tentacle_id: str):
-        self.socket_path = socket_path
+    def __init__(self, tentacle_id: str):
         self.tentacle_id = tentacle_id
-        self.sock = None
         self.handler = None
-        self.buffer = ""
 
     def connect(self):
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect(self.socket_path)
         threading.Thread(target=self._recv_loop, daemon=True).start()
 
     def on_directive(self, handler):
@@ -57,19 +52,17 @@ class IpcClient:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "message_id": str(uuid.uuid4()),
         }
-        self.sock.sendall((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
+        sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
 
     def _recv_loop(self):
-        while True:
-            data = self.sock.recv(4096)
-            if not data:
-                return
-            self.buffer += data.decode("utf-8")
-            while "\n" in self.buffer:
-                line, self.buffer = self.buffer.split("\n", 1)
-                line = line.strip()
-                if not line:
-                    continue
-                payload = json.loads(line)
-                if payload.get("type") == "directive" and self.handler:
-                    self.handler(payload.get("payload") or {})
+        for raw_line in sys.stdin:
+            line = raw_line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            if payload.get("type") == "directive" and self.handler:
+                self.handler(payload.get("payload") or {})
+
+    def close(self):
+        pass

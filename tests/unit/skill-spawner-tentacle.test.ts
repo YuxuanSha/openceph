@@ -8,6 +8,7 @@ import type { TentacleManager } from "../../src/tentacle/manager.js"
 import type { CodeAgent } from "../../src/code-agent/code-agent.js"
 import type { CredentialStore } from "../../src/config/credential-store.js"
 import { initLoggers } from "../../src/logger/index.js"
+import { TentacleValidator } from "../../src/code-agent/validator.js"
 
 function mockSkillLoader(skills: any[] = []): SkillLoader {
   const real = new SkillLoader([])
@@ -587,5 +588,92 @@ describe("SkillSpawner tentacle routing", () => {
       fs.readFileSync(path.join(dir, "tentacles", "t_readme_command", "tentacle.json"), "utf-8"),
     )
     expect(tentacleJson.entryCommand).toBe("python3 src/main.py")
+  })
+
+  it("recovers with a fresh validation pass after retries report stale failure", async () => {
+    const manager = mockTentacleManager()
+    ;(manager as any).getTentacleBaseDir = () => path.join(dir, "tentacles")
+    ;(manager as any).getStatus = vi.fn().mockReturnValue({ pid: 321 })
+    const runtimeDir = path.join(dir, "tentacles", "t_recover")
+    fs.mkdirSync(path.join(runtimeDir, "prompt"), { recursive: true })
+    fs.mkdirSync(path.join(runtimeDir, "src"), { recursive: true })
+    fs.writeFileSync(path.join(runtimeDir, "SKILL.md"), "---\nname: t_recover\nmetadata:\n  openceph:\n    tentacle:\n      spawnable: true\n      runtime: python\n      entry: src/main.py\n---\n")
+    fs.writeFileSync(path.join(runtimeDir, "README.md"), "# Deploy\n## Env\n## Steps\n")
+    fs.writeFileSync(path.join(runtimeDir, "prompt", "SYSTEM.md"), "# Identity\nRecover test.\n\n# Mission\nRecover validation state.")
+    fs.writeFileSync(path.join(runtimeDir, "src", "main.py"), "print('ok')\n")
+
+    const artifact = {
+      sessionFile: path.join(dir, "code-agent.jsonl"),
+      workDir: path.join(dir, "work"),
+      logsDir: path.join(dir, "agent-logs"),
+      terminalLog: path.join(dir, "agent-logs", "terminal.log"),
+      stdoutLog: path.join(dir, "agent-logs", "stdout.log"),
+      stderrLog: path.join(dir, "agent-logs", "stderr.log"),
+      elapsedMs: 10,
+      turnCount: 1,
+      toolCalls: [],
+    }
+    const codeAgent = {
+      generateSkillTentacle: vi.fn().mockResolvedValue(artifact),
+      fixSkillTentacle: vi.fn().mockResolvedValue(artifact),
+      deployExisting: vi.fn().mockResolvedValue(artifact),
+    } as any
+    const spawner = new SkillSpawner(makeConfig(), mockSkillLoader(), manager, codeAgent)
+
+    const validateSpy = vi.spyOn(TentacleValidator.prototype, "validateSkillTentacle")
+    validateSpy
+      .mockResolvedValueOnce({
+        passed: false,
+        checks: {
+          structure: { passed: false, errors: [{ check: "structure", message: "frontmatter missing" }], warnings: [] },
+          syntax: { passed: true, errors: [], warnings: [] },
+          contract: { passed: true, errors: [], warnings: [] },
+          security: { passed: true, errors: [], warnings: [] },
+          smoke: { passed: true, errors: [], warnings: [] },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        passed: false,
+        checks: {
+          structure: { passed: false, errors: [{ check: "structure", message: "frontmatter missing" }], warnings: [] },
+          syntax: { passed: true, errors: [], warnings: [] },
+          contract: { passed: true, errors: [], warnings: [] },
+          security: { passed: true, errors: [], warnings: [] },
+          smoke: { passed: true, errors: [], warnings: [] },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        passed: false,
+        checks: {
+          structure: { passed: false, errors: [{ check: "structure", message: "frontmatter missing" }], warnings: [] },
+          syntax: { passed: true, errors: [], warnings: [] },
+          contract: { passed: true, errors: [], warnings: [] },
+          security: { passed: true, errors: [], warnings: [] },
+          smoke: { passed: true, errors: [], warnings: [] },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        passed: true,
+        checks: {
+          structure: { passed: true, errors: [], warnings: [] },
+          syntax: { passed: true, errors: [], warnings: [] },
+          contract: { passed: true, errors: [], warnings: [] },
+          security: { passed: true, errors: [], warnings: [] },
+          smoke: { passed: true, errors: [], warnings: [] },
+        },
+      } as any)
+
+    const result = await spawner.spawn({
+      tentacleId: "t_recover",
+      purpose: "recover test",
+      workflow: "recover test workflow",
+      userConfirmed: true,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.spawned).toBe(true)
+    expect(result.codeAgentSessionFile).toBe(artifact.sessionFile)
+    expect(codeAgent.fixSkillTentacle).toHaveBeenCalledTimes(2)
+    expect(codeAgent.deployExisting).toHaveBeenCalledTimes(1)
   })
 })

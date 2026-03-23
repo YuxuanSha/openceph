@@ -28,13 +28,11 @@ describe("TentacleValidator structure checks", () => {
     fs.writeFileSync(path.join(base, "README.md"), "# Test\n\n## Environment Variables\n\n## Deploy Steps\n\nbash commands here\n")
     fs.writeFileSync(path.join(base, "prompt", "SYSTEM.md"), "# Identity\nYou are a test tentacle.\n\n# Mission\nTest the validation system thoroughly and report findings.")
     fs.writeFileSync(path.join(base, "src", "main.py"), `
-import os, socket, json, uuid, time
-SOCKET_PATH = os.environ.get("OPENCEPH_SOCKET_PATH", "")
+import os, sys, json, uuid, time
 TENTACLE_ID = os.environ.get("OPENCEPH_TENTACLE_ID", "test")
 TRIGGER_MODE = os.environ.get("OPENCEPH_TRIGGER_MODE", "self")
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(SOCKET_PATH)
-sock.sendall((json.dumps({"type": "tentacle_register", "sender": TENTACLE_ID, "receiver": "brain", "payload": {"tentacle_id": TENTACLE_ID, "purpose": "test", "runtime": "python", "pid": os.getpid()}, "timestamp": "", "message_id": str(uuid.uuid4())}) + "\\n").encode())
+sys.stdout.write(json.dumps({"type": "tentacle_register", "sender": TENTACLE_ID, "receiver": "brain", "payload": {"tentacle_id": TENTACLE_ID, "purpose": "test", "runtime": "python", "pid": os.getpid()}, "timestamp": "", "message_id": str(uuid.uuid4())}) + "\\n")
+sys.stdout.flush()
 running = True
 paused = False
 def handle_directive(data):
@@ -45,7 +43,17 @@ def handle_directive(data):
     if action == "resume": paused = False
     if action == "run_now": paused = False
 def consultation_request(items, summary):
-    sock.sendall((json.dumps({"type": "consultation_request", "sender": TENTACLE_ID, "receiver": "brain", "payload": {"tentacle_id": TENTACLE_ID, "request_id": str(uuid.uuid4()), "mode": "batch", "items": items, "summary": summary}, "timestamp": "", "message_id": str(uuid.uuid4())}) + "\\n").encode())
+    sys.stdout.write(json.dumps({"type": "consultation_request", "sender": TENTACLE_ID, "receiver": "brain", "payload": {"tentacle_id": TENTACLE_ID, "request_id": str(uuid.uuid4()), "mode": "batch", "items": items, "summary": summary}, "timestamp": "", "message_id": str(uuid.uuid4())}) + "\\n")
+    sys.stdout.flush()
+def reader():
+    global running, paused
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        message = json.loads(line)
+        if message.get("type") == "directive":
+            handle_directive(message)
 if TRIGGER_MODE == "self":
     while running:
         if not paused:

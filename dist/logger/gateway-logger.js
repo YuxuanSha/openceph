@@ -1,9 +1,11 @@
 import { createLogger } from "./create-logger.js";
 import * as path from "path";
+import { getAgentLogsDir } from "./log-paths.js";
 let logger = null;
 export function initGatewayLogger(logDir, level, maxSizeMb, keepDays) {
+    const gatewayLogDir = getAgentLogsDir(logDir, "gateway");
     logger = createLogger({
-        filename: path.join(logDir, "gateway-%DATE%.log"),
+        filename: path.join(gatewayLogDir, "events-%DATE%.log"),
         level,
         maxSize: `${maxSizeMb}m`,
         maxFiles: `${keepDays}d`,

@@ -4,10 +4,10 @@ Generate a complete Python Agent system with the following structure:
 
 ## Required Architecture
 
-1. **IPC Connection**: Connect to Unix socket via `OPENCEPH_SOCKET_PATH`
+1. **IPC Connection**: Use stdin/stdout JSON Lines
 2. **Registration**: Send `tentacle_register` immediately on startup
 3. **Main Loop**: Work cycle → accumulate → batch report via `consultation_request`
-4. **Directive Handler**: Background thread listening for `directive` messages (pause/resume/kill)
+4. **Directive Handler**: Background thread listening on stdin for `directive` messages
 5. **Trigger Mode**: Respect `OPENCEPH_TRIGGER_MODE` (self = internal scheduling, external = wait for triggers)
 
 ## Code Structure
@@ -21,12 +21,11 @@ Generate a complete Python Agent system with the following structure:
 
 ### IPC Communication
 ```python
-import json, os, socket, threading, uuid, time
+import json, os, sys, threading, uuid, time
 
 class IpcConnection:
     def __init__(self):
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect(os.environ["OPENCEPH_SOCKET_PATH"])
+        self._handler = None
 
     def send(self, msg_type, payload):
         msg = json.dumps({
@@ -35,7 +34,17 @@ class IpcConnection:
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "message_id": str(uuid.uuid4()),
         }) + "\n"
-        self.sock.sendall(msg.encode("utf-8"))
+        sys.stdout.write(msg)
+        sys.stdout.flush()
+
+    def listen(self):
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            message = json.loads(line)
+            if message.get("type") == "directive" and self._handler:
+                self._handler(message.get("payload", {}))
 ```
 
 ### Batch Consultation
@@ -58,7 +67,6 @@ The tentacle should have its own filtering and quality logic:
 - Decide when to report (e.g., 3+ items, high-urgency item, daily minimum)
 
 ## Environment Variables
-- `OPENCEPH_SOCKET_PATH` — Unix socket path (required)
 - `OPENCEPH_TENTACLE_ID` — Tentacle identifier (required)
 - `OPENCEPH_TRIGGER_MODE` — "self" or "external" (required)
 - `OPENCEPH_LLM_API_KEY` / `OPENCEPH_LLM_BASE_URL` / `OPENCEPH_LLM_MODEL` — LLM runtime config (if LLM needed)

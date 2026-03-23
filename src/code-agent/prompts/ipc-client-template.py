@@ -1,14 +1,14 @@
 """
-IPC 客户端 — OpenCeph IPC 三条契约实现
-所有 Python skill_tentacle 直接复用此文件
+IPC 客户端 — OpenCeph stdin/stdout JSON Lines 协议
+所有 Python skill_tentacle 直接复用此文件。
 """
 
 import json
-import socket
-import uuid
-import os
-import threading
 import logging
+import os
+import sys
+import threading
+import uuid
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -16,40 +16,31 @@ log = logging.getLogger(__name__)
 
 
 class IpcClient:
-    def __init__(self, socket_path: str, tentacle_id: str):
-        self.socket_path = socket_path
+    def __init__(self, tentacle_id: str):
         self.tentacle_id = tentacle_id
-        self._sock: Optional[socket.socket] = None
         self._directive_handler: Optional[Callable] = None
         self._recv_thread: Optional[threading.Thread] = None
-        self._buffer = ""
 
     def connect(self):
-        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._sock.connect(self.socket_path)
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
-        log.info(f"IPC 已连接：{self.socket_path}")
+        log.info("IPC 已就绪（stdin/stdout）")
 
     def _send(self, msg: dict):
         line = json.dumps(msg, ensure_ascii=False) + "\n"
-        self._sock.sendall(line.encode("utf-8"))
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
     def _recv_loop(self):
-        while True:
+        for raw_line in sys.stdin:
             try:
-                data = self._sock.recv(4096)
-                if not data:
-                    break
-                self._buffer += data.decode("utf-8")
-                while "\n" in self._buffer:
-                    line, self._buffer = self._buffer.split("\n", 1)
-                    if line.strip():
-                        msg = json.loads(line)
-                        self._handle_incoming(msg)
-            except Exception as e:
-                log.error(f"IPC 接收异常：{e}")
-                break
+                line = raw_line.strip()
+                if not line:
+                    continue
+                msg = json.loads(line)
+                self._handle_incoming(msg)
+            except Exception as exc:
+                log.error(f"IPC 接收异常：{exc}")
 
     def _handle_incoming(self, msg: dict):
         msg_type = msg.get("type")
@@ -75,7 +66,7 @@ class IpcClient:
         })
 
     # ── 契约 2：批量上报 ──
-    def consultation_request(self, mode: str, items: list, summary: str):
+    def consultation_request(self, mode: str, items: list, summary: str, context: str = ""):
         self._send({
             "type": "consultation_request",
             "sender": self.tentacle_id,
@@ -86,6 +77,7 @@ class IpcClient:
                 "mode": mode,
                 "items": items,
                 "summary": summary,
+                "context": context,
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "message_id": str(uuid.uuid4()),
@@ -96,5 +88,4 @@ class IpcClient:
         self._directive_handler = handler
 
     def close(self):
-        if self._sock:
-            self._sock.close()
+        pass

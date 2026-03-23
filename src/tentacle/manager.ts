@@ -23,6 +23,7 @@ import { TentacleRegistry } from "./registry.js"
 import type { TentacleScheduleConfig } from "./tentacle-schedule.js"
 import type { CronScheduler } from "../cron/cron-scheduler.js"
 import { parseDurationMs } from "../cron/time.js"
+import { getTentacleLogsDir } from "../logger/log-paths.js"
 
 export interface TentacleStatus {
   tentacleId: string
@@ -117,16 +118,29 @@ export class TentacleManager {
     const metadata = await this.readMetadata(tentacleId)
     const scheduleConfig = metadata.scheduleConfig ?? inferScheduleConfig(metadata.trigger)
     const modelEnv = buildTentacleModelEnv(this.config)
+    const runtimeDir = this.getTentacleRuntimeDir(tentacleId)
+    await fs.mkdir(runtimeDir, { recursive: true })
+    const selfScheduleInterval = scheduleConfig.primaryTrigger.type === "self-schedule"
+      ? scheduleConfig.primaryTrigger.interval
+      : undefined
     const child = spawn("bash", ["-lc", metadata.entryCommand], {
       cwd: metadata.cwd ?? this.getTentacleDir(tentacleId),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         ...modelEnv,
         OPENCEPH_SOCKET_PATH: this.config.tentacle.ipcSocketPath,
         OPENCEPH_TENTACLE_ID: tentacleId,
         OPENCEPH_TRIGGER_MODE: scheduleConfig.primaryTrigger.type === "self-schedule" ? "self" : "external",
+        OPENCEPH_TENTACLE_DIR: metadata.cwd ?? this.getTentacleDir(tentacleId),
+        OPENCEPH_RUNTIME_DIR: runtimeDir,
+        OPENCEPH_SELF_SCHEDULE: selfScheduleInterval ?? "",
+        OPENCEPH_SELF_INTERVAL_SECONDS: this.toSelfIntervalSeconds(selfScheduleInterval),
       },
+    })
+    this.ipcServer.attachProcess(tentacleId, {
+      stdin: child.stdin,
+      stdout: child.stdout,
     })
 
     this.processes.set(tentacleId, child)
@@ -153,29 +167,53 @@ export class TentacleManager {
 
     systemLogger.info("tentacle_spawned", { tentacle_id: tentacleId, pid: child.pid })
     tentacleLog(tentacleId, "info", "tentacle_spawned", { pid: child.pid })
+    void this.appendRuntimeOutput(
+      tentacleId,
+      "event",
+      `[event] ${new Date().toISOString()} tentacle_spawned pid=${child.pid ?? "unknown"} command=${metadata.entryCommand}\n`,
+    )
 
     child.stdout?.on("data", (chunk) => {
-      tentacleLog(tentacleId, "info", "stdout", { text: chunk.toString("utf-8").slice(0, 1000) })
+      const text = chunk.toString("utf-8")
+      tentacleLog(tentacleId, "info", "stdout", { text: text.slice(0, 1000) })
+      void this.appendRuntimeOutput(tentacleId, "stdout", text)
     })
     child.stderr?.on("data", (chunk) => {
-      tentacleLog(tentacleId, "warn", "stderr", { text: chunk.toString("utf-8").slice(0, 1000) })
+      const text = chunk.toString("utf-8")
+      tentacleLog(tentacleId, "warn", "stderr", { text: text.slice(0, 1000) })
+      void this.appendRuntimeOutput(tentacleId, "stderr", text)
     })
 
     child.on("exit", (code) => {
       this.processes.delete(tentacleId)
+      this.ipcServer.disconnect(tentacleId)
+      void this.appendRuntimeOutput(
+        tentacleId,
+        "event",
+        `[event] ${new Date().toISOString()} process_exit code=${code ?? -1}\n`,
+      )
       void this.handleCrash(tentacleId, code ?? -1)
     })
   }
 
   async kill(tentacleId: string, reason: string): Promise<boolean> {
     const proc = this.processes.get(tentacleId)
-    if (!proc) return false
-    proc.kill("SIGTERM")
-    this.processes.delete(tentacleId)
+    if (proc) {
+      proc.kill("SIGTERM")
+      this.processes.delete(tentacleId)
+    } else if (!this.isKnownTentacle(tentacleId)) {
+      return false
+    }
+    this.ipcServer.disconnect(tentacleId)
     await this.clearTentacleScheduling(tentacleId)
     this.updateStatus(tentacleId, { status: "killed" })
     await this.registry.markKilled(tentacleId)
     tentacleLog(tentacleId, "info", "tentacle_killed", { reason })
+    void this.appendRuntimeOutput(
+      tentacleId,
+      "event",
+      `[event] ${new Date().toISOString()} tentacle_killed reason=${reason}\n`,
+    )
     return true
   }
 
@@ -191,8 +229,24 @@ export class TentacleManager {
 
   async resume(tentacleId: string): Promise<boolean> {
     const proc = this.processes.get(tentacleId)
-    if (!proc?.pid) return false
-    process.kill(proc.pid, "SIGCONT")
+    if (proc?.pid) {
+      process.kill(proc.pid, "SIGCONT")
+      await this.setRelatedJobsEnabled(tentacleId, true)
+      this.updateStatus(tentacleId, { status: "running" })
+      await this.syncRegistry(tentacleId, "running")
+      return true
+    }
+
+    if (!this.isKnownTentacle(tentacleId)) {
+      return false
+    }
+
+    await this.spawn(tentacleId)
+    const registered = await this.waitForRegistration(tentacleId, 10_000)
+    if (!registered) {
+      await this.kill(tentacleId, "resume_registration_timeout").catch(() => undefined)
+      return false
+    }
     await this.setRelatedJobsEnabled(tentacleId, true)
     this.updateStatus(tentacleId, { status: "running" })
     await this.syncRegistry(tentacleId, "running")
@@ -336,6 +390,13 @@ export class TentacleManager {
     return path.join(this.getTentacleBaseDir(), tentacleId)
   }
 
+  getTentacleRuntimeDir(tentacleId: string): string {
+    return getTentacleLogsDir(
+      this.config.logging?.logDir ?? path.join(path.dirname(this.config.tentacle.ipcSocketPath), "logs"),
+      tentacleId,
+    )
+  }
+
   getTentacleBaseDir(): string {
     return path.join(path.dirname(this.config.tentacle.ipcSocketPath), "tentacles")
   }
@@ -347,11 +408,18 @@ export class TentacleManager {
     const restartAttempt = (this.restartCounts.get(tentacleId) ?? 0) + 1
     this.restartCounts.set(tentacleId, restartAttempt)
     systemLogger.warn("tentacle_crash", { tentacle_id: tentacleId, exit_code: exitCode, restart_attempt: restartAttempt })
+    tentacleLog(tentacleId, "warn", "tentacle_crash", { exit_code: exitCode, restart_attempt: restartAttempt })
+    void this.appendRuntimeOutput(
+      tentacleId,
+      "event",
+      `[event] ${new Date().toISOString()} tentacle_crash exit_code=${exitCode} restart_attempt=${restartAttempt}\n`,
+    )
 
     if (restartAttempt >= this.config.tentacle.crashRestartMaxAttempts) {
       this.updateStatus(tentacleId, { status: "crashed", healthScore: 0 })
       await this.registry.updateStatus(tentacleId, "crashed", { health: "崩溃" })
       systemLogger.error("tentacle_crash_permanent", { tentacle_id: tentacleId })
+      tentacleLog(tentacleId, "error", "tentacle_crash_permanent", { exit_code: exitCode })
       return
     }
 
@@ -625,6 +693,42 @@ export class TentacleManager {
       cronJobs: [],
       heartbeat: current.heartbeat,
     })
+  }
+
+  private isKnownTentacle(tentacleId: string): boolean {
+    return this.statusMap.has(tentacleId) || existsSync(path.join(this.getTentacleDir(tentacleId), "tentacle.json"))
+  }
+
+  private toSelfIntervalSeconds(interval?: string): string {
+    if (!interval) return ""
+    try {
+      return String(Math.max(1, Math.round(parseDurationMs(interval) / 1000)))
+    } catch {
+      return ""
+    }
+  }
+
+  private async appendRuntimeOutput(
+    tentacleId: string,
+    stream: "stdout" | "stderr" | "event",
+    text: string,
+  ): Promise<void> {
+    const runtimeDir = this.getTentacleRuntimeDir(tentacleId)
+    try {
+      await fs.mkdir(runtimeDir, { recursive: true })
+      const fileName = stream === "event" ? "terminal.log" : `${stream}.log`
+      await fs.appendFile(path.join(runtimeDir, fileName), text, "utf-8")
+      if (stream !== "event") {
+        const combinedLine = text
+          .split(/(?<=\n)/)
+          .filter(Boolean)
+          .map((part) => `[${stream}] ${part}`)
+          .join("")
+        await fs.appendFile(path.join(runtimeDir, "terminal.log"), combinedLine, "utf-8")
+      }
+    } catch {
+      // Runtime logging must never crash the manager.
+    }
   }
 }
 

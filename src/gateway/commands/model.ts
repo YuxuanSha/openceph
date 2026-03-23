@@ -3,7 +3,7 @@ import type { CommandExecutor, CommandContext } from "./command-handler.js"
 export const modelCommand: CommandExecutor = {
   async execute(args: string[], ctx: CommandContext): Promise<string> {
     if (args.length === 0) {
-      return `Current model: ${ctx.brain.model}`
+      return `Current model: ${await ctx.brain.getSelectedModel(ctx.sessionKey)}`
     }
 
     if (args[0] === "list") {
@@ -17,12 +17,12 @@ export const modelCommand: CommandExecutor = {
     }
 
     if (args[0] === "status") {
-      return `Model: ${ctx.brain.model}\nAPI mode: api_key`
+      return `Model: ${await ctx.brain.getSelectedModel(ctx.sessionKey)}\nAPI mode: api_key`
     }
 
     // Switch model
     const newModel = args[0]
-    await ctx.brain.resetSession(newModel)
+    await ctx.brain.resetSession(newModel, ctx.sessionKey)
     return `Model switched to: ${newModel}`
   },
 }
