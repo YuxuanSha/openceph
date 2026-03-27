@@ -216,7 +216,7 @@ export class TentacleLifecycleManager {
     // 4. Deploy new tentacle
     const directory = await this.deployer.deploy(config.newTentacleId, normalized, {
       purpose: config.newPurpose,
-      workflow: `Merged from: ${tentacleIds.join(", ")}`,
+      brief: `Merged from: ${tentacleIds.join(", ")}`,
     })
 
     // 5. Spawn new tentacle

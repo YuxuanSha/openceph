@@ -11,7 +11,7 @@ export function createWebTools(): ToolRegistryEntry[] {
   const webSearch: ToolDefinition = {
     name: "web_search",
     label: "Web Search",
-    description: "搜索网页，返回搜索结果摘要。无需 API key，使用 DuckDuckGo。",
+    description: "搜索互联网公开信息。注意：不要用来搜索 OpenCeph 内部系统问题（部署失败、触手错误等），这些互联网上搜不到。",
     promptSnippet: "web_search — 搜索网页（DuckDuckGo），结果缓存 15 分钟",
     promptGuidelines: [
       "当用户说「帮我搜一下」「搜索」「查一下」「找一下」时，调用 web_search 工具。",

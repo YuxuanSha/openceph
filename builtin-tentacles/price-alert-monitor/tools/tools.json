@@ -1,0 +1,19 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "check_price",
+        "description": "Fetch the current price for a configured watch item",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "item_name": { "type": "string", "description": "Name of the watch item" },
+            "url": { "type": "string", "description": "URL to fetch price from" }
+          },
+          "required": ["item_name", "url"]
+        }
+      }
+    }
+  ]
+}

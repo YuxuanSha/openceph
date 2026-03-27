@@ -43,6 +43,7 @@ import { ModelFailover, type FailoverDecision } from "./failover.js"
 import type { ConsultationReplyPayload, ConsultationRequestPayload } from "../tentacle/contract.js"
 import { MemoryManager } from "../memory/memory-manager.js"
 import { ConsultationSessionStore, type ConsultationSessionRecord } from "../tentacle/consultation-session-store.js"
+import { ConsultationSessionManager } from "../tentacle/consultation-session.js"
 
 export interface BrainOptions {
   config: OpenCephConfig
@@ -65,6 +66,7 @@ export interface ToolCallRecord {
   name: string
   success: boolean
   durationMs?: number
+  args?: Record<string, unknown>
 }
 
 export interface BrainOutput {
@@ -123,6 +125,7 @@ export class Brain {
   private readonly deliverToUser?: GatewayDeliveryFn
   private readonly memoryManager: MemoryManager
   private readonly consultationStore: ConsultationSessionStore
+  private consultationSessionManager: ConsultationSessionManager | null = null
   private readonly pushMessageToConsultationSession: Map<string, string> = new Map()
 
   constructor(options: BrainOptions) {
@@ -227,9 +230,92 @@ export class Brain {
   async initialize(): Promise<void> {
     await this.ipcServer.start()
     await this.tentacleManager.restoreFromRegistry()
+    await this.tentacleManager.respawnFromRegistry()
+    // Initialize ConsultationSessionManager for multi-turn LLM-based consultations
+    this.consultationSessionManager = new ConsultationSessionManager({
+      config: this.config,
+      tentacleManager: this.tentacleManager,
+      consultationStore: this.consultationStore,
+      sessionStore: this.sessionStore,
+      deliverToUser: this.deliverToUser
+        ? async (_channel, _senderId, message) => {
+            const pushId = crypto.randomUUID()
+            const resolvedChannel = this.lastActiveChannel || "cli"
+            const resolvedSender = this.lastActiveSenderId || "local"
+            await this.deliverToUser!(
+              { channel: resolvedChannel, senderId: resolvedSender, recipientId: resolvedSender },
+              { text: message, timing: "immediate", priority: "normal", messageId: pushId },
+            )
+            return { pushId }
+          }
+        : undefined,
+      getMemorySummary: async () => {
+        try {
+          return await this.memoryManager.readMemory()
+        } catch { return "" }
+      },
+      getUserPreferences: async () => {
+        try {
+          const userMdPath = path.join(this.piCtx.workspaceDir, "USER.md")
+          return await fs.readFile(userMdPath, "utf-8")
+        } catch { return "" }
+      },
+      runBrainTurn: async (consultationId, systemPrompt, messages) => {
+        const output = await this.runIsolatedTurn({
+          sessionKey: `consultation:${consultationId}`,
+          mode: "minimal",
+          message: messages.map(m => `[${m.role}]: ${m.content}`).join("\n\n"),
+          systemPromptOverride: systemPrompt,
+        })
+        // Extract send_to_user calls from tool calls (args captured via tool_execution_start event)
+        const pushedItems: Array<{ message: string; pushId?: string }> = []
+        for (const tc of output.toolCalls) {
+          if (tc.name === "send_to_user" && tc.args) {
+            const msg = (tc.args as any).message ?? (tc.args as any).text ?? ""
+            if (msg) pushedItems.push({ message: msg })
+          }
+        }
+        return {
+          content: output.text,
+          toolCalls: output.toolCalls.map(tc => ({ name: tc.name })),
+          pushedItems: pushedItems.length > 0 ? pushedItems : undefined,
+        }
+      },
+    })
     this.tentacleManager.setConsultationHandler(async ({ tentacleId, payload }) => {
+      if (this.consultationSessionManager) {
+        return this.consultationSessionManager.handleConsultationRequest(tentacleId, payload)
+      }
       return this.handleTentacleConsultation(tentacleId, payload)
     })
+    this.tentacleManager.setConsultationMessageHandler(async ({ tentacleId, payload }) => {
+      if (this.consultationSessionManager) {
+        await this.consultationSessionManager.handleConsultationMessage(tentacleId, payload)
+      }
+    })
+    this.tentacleManager.setConsultationEndHandler(async ({ tentacleId, payload }) => {
+      if (this.consultationSessionManager) {
+        await this.consultationSessionManager.handleConsultationEnd(tentacleId, payload)
+      }
+    })
+    // Register tool_request handler: maps openceph_* shared tools to Brain's internal tools
+    this.tentacleManager.setToolRequestHandler(async ({ tentacleId, payload }) => {
+      const { tool_name, tool_call_id, arguments: args } = payload
+      // Map openceph_* prefix to internal tool name (e.g. openceph_web_search -> web_search)
+      const internalName = tool_name.startsWith("openceph_") ? tool_name.slice("openceph_".length) : tool_name
+      const tool = this.toolRegistry.get(internalName)
+      if (!tool) {
+        return { tool_call_id, result: {}, success: false, error: `Unknown shared tool: ${tool_name}` }
+      }
+      try {
+        const result = await tool.tool.execute(tool_call_id, args, undefined, undefined, undefined as any)
+        const text = result.content?.map((c: any) => c.text ?? "").join("") ?? ""
+        return { tool_call_id, result: { text }, success: true }
+      } catch (err: any) {
+        return { tool_call_id, result: {}, success: false, error: err.message }
+      }
+    })
+
     this.tentacleManager.setAdjustmentHandler(async ({ tentacleId, adjustment, currentSchedule }) => {
       const output = await this.runIsolatedTurn({
         sessionKey: `adjustment:${tentacleId}`,
@@ -310,30 +396,84 @@ export class Brain {
     })
   }
 
-  /** Write TOOLS.md to workspace dir based on actually registered tools */
+  /**
+   * Write TOOLS.md to workspace dir.
+   * Strategy: Load the template TOOLS.md (which contains detailed guidance),
+   * then append any registered tools not mentioned in the template.
+   * This preserves the hand-written "when to use / when not to use" guidance.
+   */
   private async syncToolsMd(): Promise<void> {
     const toolsMdPath = path.join(this.piCtx.workspaceDir, "TOOLS.md")
-    const groups = new Map<string, { name: string; description: string }[]>()
 
-    for (const entry of this.toolRegistry.getAll()) {
+    // Read the current TOOLS.md content (contains detailed guidance from template)
+    let templateContent = ""
+    try {
+      templateContent = await fs.readFile(toolsMdPath, "utf-8")
+      // Strip any previously appended auto-generated section for clean re-sync
+      const autoGenMarker = "\n\n## 其他已注册工具\n"
+      const markerIdx = templateContent.indexOf(autoGenMarker)
+      if (markerIdx !== -1) {
+        templateContent = templateContent.slice(0, markerIdx)
+      }
+    } catch {
+      // File doesn't exist yet — will be created below
+    }
+
+    // Collect all registered tools
+    const allTools = this.toolRegistry.getAll()
+
+    // Find tools not mentioned in the template
+    const unmentionedTools: { name: string; group: string; description: string }[] = []
+    for (const entry of allTools) {
+      if (!templateContent.includes(entry.name)) {
+        unmentionedTools.push({ name: entry.name, group: entry.group, description: entry.description })
+      }
+    }
+
+    // If template exists and covers all tools, just keep it as-is
+    if (templateContent && unmentionedTools.length === 0) {
+      // Template is complete — no need to modify
+      return
+    }
+
+    // If template exists but some tools are missing, append them
+    if (templateContent && unmentionedTools.length > 0) {
+      const groupLabels: Record<string, string> = {
+        user: "核心工具", messaging: "消息工具", memory: "记忆工具",
+        web: "网页工具", sessions: "会话工具", skill: "技能工具",
+        heartbeat: "Heartbeat 工具", tentacle: "触手工具",
+        code: "代码工具", mcp: "MCP 工具",
+      }
+      const grouped = new Map<string, typeof unmentionedTools>()
+      for (const t of unmentionedTools) {
+        const list = grouped.get(t.group) || []
+        list.push(t)
+        grouped.set(t.group, list)
+      }
+      let appendix = "\n\n## 其他已注册工具\n"
+      for (const [group, tools] of grouped) {
+        appendix += `\n### ${groupLabels[group] || group}\n`
+        for (const t of tools) {
+          appendix += `${t.name} — ${t.description}\n`
+        }
+      }
+      await fs.writeFile(toolsMdPath, templateContent + appendix, "utf-8")
+      return
+    }
+
+    // No template at all — generate from scratch (backward compat)
+    const groups = new Map<string, { name: string; description: string }[]>()
+    for (const entry of allTools) {
       const list = groups.get(entry.group) || []
       list.push({ name: entry.name, description: entry.description })
       groups.set(entry.group, list)
     }
-
     const groupLabels: Record<string, string> = {
-      user: "核心工具",
-      messaging: "消息工具",
-      memory: "记忆工具",
-      web: "网页工具",
-      sessions: "会话工具",
-      skill: "技能工具",
-      heartbeat: "Heartbeat 工具",
-      tentacle: "触手工具",
-      code: "代码工具",
-      mcp: "MCP 工具",
+      user: "核心工具", messaging: "消息工具", memory: "记忆工具",
+      web: "网页工具", sessions: "会话工具", skill: "技能工具",
+      heartbeat: "Heartbeat 工具", tentacle: "触手工具",
+      code: "代码工具", mcp: "MCP 工具",
     }
-
     let md = "# TOOLS.md — 工具使用指南\n"
     for (const [group, tools] of groups) {
       md += `\n## ${groupLabels[group] || group}\n`
@@ -341,7 +481,6 @@ export class Brain {
         md += `${t.name} — ${t.description}\n`
       }
     }
-
     md += `\n## 工具使用原则\n`
     md += `- 能直接回答的不调工具\n`
     md += `- 当前这轮对话的正常回复，直接输出文本；不要调用 send_to_user\n`
@@ -353,7 +492,6 @@ export class Brain {
     md += `- 调用 invoke_code_agent / spawn_from_skill 后，必须按 tool result 原样区分 generated、deployed、spawned、running，禁止把 deployed 说成已运行\n`
     md += `- 只有 tool result 明确给出 spawned=true 或运行态证据时，才能说"已启动/后台运行"\n`
     md += `- 只能引用 tool result 或状态系统返回的真实日志路径，禁止臆造 logs/ 目录\n`
-
     await fs.writeFile(toolsMdPath, md, "utf-8")
   }
 
@@ -447,6 +585,7 @@ export class Brain {
     model?: string
     mode?: "full" | "minimal"
     thinking?: string
+    systemPromptOverride?: string
   }): Promise<BrainOutput> {
     const resolution = resolveRunnableModel({
       piCtx: this.piCtx,
@@ -461,17 +600,18 @@ export class Brain {
     })
     await cronSessionStore.updateModel(params.sessionKey, model)
     const customTools = this.toolRegistry.getPiTools()
+    const systemPrompt = params.systemPromptOverride ?? await this.buildSystemPrompt({
+      channel: "cron",
+      isDm: true,
+      model,
+      mode: params.mode ?? "minimal",
+      thinkingLevel: normalizeThinkingLevel(params.thinking ?? this.currentThinkingLevel),
+      reasoningEnabled: this.reasoningEnabled,
+    })
     const session = await createBrainSession(this.piCtx, this.config, {
       sessionFilePath: cronSessionStore.getTranscriptPath(sessionEntry.sessionId),
       modelId: model,
-      systemPrompt: await this.buildSystemPrompt({
-        channel: "cron",
-        isDm: true,
-        model,
-        mode: params.mode ?? "minimal",
-        thinkingLevel: normalizeThinkingLevel(params.thinking ?? this.currentThinkingLevel),
-        reasoningEnabled: this.reasoningEnabled,
-      }),
+      systemPrompt,
       customTools,
       thinkingLevel: normalizeThinkingLevel(params.thinking ?? this.currentThinkingLevel),
     })
@@ -479,13 +619,17 @@ export class Brain {
     let replyText = ""
     let errorMessage = ""
     const toolCalls: ToolCallRecord[] = []
+    const pendingArgs = new Map<string, Record<string, unknown>>()
     const unsubscribe = session.session.subscribe((event: any) => {
       if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
         replyText += event.assistantMessageEvent.delta
       } else if (event.type === "message_complete" && event.message?.errorMessage) {
         errorMessage = event.message.errorMessage
+      } else if (event.type === "tool_execution_start") {
+        if (event.args) pendingArgs.set(event.toolCallId, event.args)
       } else if (event.type === "tool_execution_end") {
-        toolCalls.push({ name: event.toolName, success: !event.isError })
+        toolCalls.push({ name: event.toolName, success: !event.isError, args: pendingArgs.get(event.toolCallId) })
+        pendingArgs.delete(event.toolCallId)
       }
     })
 
@@ -688,6 +832,15 @@ export class Brain {
     const durationMs = Date.now() - startTime
     if (loopAborted && !replyText.trim()) {
       replyText = "检测到工具调用循环，已中止。"
+    }
+
+    // Empty response guard: if no text and no tool calls, return a friendly message
+    if (!replyText.trim() && toolCalls.length === 0 && !errorMessage) {
+      brainLogger.warn("empty_response", {
+        session_id: sessionEntry.sessionId,
+        model: params.model,
+      })
+      replyText = "抱歉，我刚才没有生成有效回复，请再说一次。"
     }
 
     brainLogger.info("streaming_end", {
@@ -1232,7 +1385,7 @@ export class Brain {
     return this.consultationStore.upsert({
       sessionId,
       tentacleId,
-      mode: payload.mode,
+      mode: payload.mode as any,
       status: payload.mode === "action_confirm" ? "waiting_user" : "open",
       requestIds: [payload.request_id],
       turn: payload.turn ?? 1,

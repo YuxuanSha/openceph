@@ -1,0 +1,41 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "fetch_items",
+      "description": "从数据源获取最新内容（替换为你的数据源）",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "搜索关键词"
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "最大返回数量",
+            "default": 50
+          }
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_item_details",
+      "description": "获取单条内容的详细信息（替换为你的数据源）",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "内容 ID"
+          }
+        },
+        "required": ["item_id"]
+      }
+    }
+  }
+]

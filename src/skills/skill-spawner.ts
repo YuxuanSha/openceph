@@ -1,7 +1,11 @@
 import * as fs from "fs/promises"
-import { existsSync } from "fs"
-import { execFile } from "child_process"
+import { existsSync, readdirSync } from "fs"
+import { execFile, exec } from "child_process"
+import { promisify } from "util"
 import * as path from "path"
+import * as os from "os"
+
+const execAsync = promisify(exec)
 import type { OpenCephConfig } from "../config/config-schema.js"
 import { brainLogger, systemLogger } from "../logger/index.js"
 import {
@@ -24,14 +28,10 @@ import { buildTentacleModelEnv } from "../config/model-runtime.js"
 import { TentaclePackager } from "./tentacle-packager.js"
 
 export interface SpawnParams {
+  mode: "deploy" | "customize" | "create"
   skillName?: string
   tentacleId: string
   purpose: string
-  workflow: string
-  capabilities?: TentacleCapability[]
-  reportStrategy?: string
-  infrastructure?: CodeAgentRequirement["infrastructure"]
-  externalApis?: string[]
   preferredRuntime?: string
   userConfirmed: boolean
 
@@ -39,6 +39,9 @@ export interface SpawnParams {
   skillTentaclePath?: string
   packageAfter?: boolean
   config?: Record<string, unknown>
+
+  // 场景 B/C 自由文本需求描述（Brain 写给 Claude Code 的任务描述）
+  brief?: string
 }
 
 export interface SpawnResult {
@@ -105,10 +108,10 @@ export class SkillSpawner {
 
   /**
    * Unified spawn entry point.
-   * Routes to the appropriate spawn path based on skill type:
-   * - skill_tentacle → spawnFromSkillTentacle (scene 1: deploy existing)
-   * - legacy spawnable SKILL → spawnFromLegacySkill (Claude Code generates from blueprint)
-   * - no skill → spawnFromScratch (scene 2: Claude Code generates skill_tentacle)
+   * Routes by explicit mode parameter:
+   * - deploy → spawnDeploy (scene A: pure copy + setup, NO Claude Code)
+   * - customize → spawnCustomize (scene B: copy + Claude Code local changes)
+   * - create → spawnFromScratch (scene C: Claude Code generates full skill_tentacle)
    */
   async spawn(params: SpawnParams): Promise<SpawnResult> {
     await this.skillLoader.loadAll()
@@ -116,72 +119,36 @@ export class SkillSpawner {
     systemLogger.info("spawn_start", {
       tentacle_id: params.tentacleId,
       skill_name: params.skillName ?? "none",
+      mode: params.mode,
       purpose: params.purpose,
     })
     brainLogger.info("spawn_start", {
       tentacle_id: params.tentacleId,
       skill_name: params.skillName ?? "none",
+      mode: params.mode,
     })
 
-    // Route: direct path to skill_tentacle directory or .tentacle file
-    if (params.skillTentaclePath) {
-      return this.spawnFromPath(params)
-    }
+    switch (params.mode) {
+      case "deploy":
+        // Scene A: direct copy + config injection + setup_commands + spawn
+        // NEVER calls Claude Code
+        return this.spawnDeploy(params)
 
-    // Route decision
-    if (params.skillName) {
-      const skill = this.skillLoader.get(params.skillName)
-      if (skill?.isSkillTentacle) {
-        brainLogger.info("skill_tentacle_matched", {
-          skill_name: params.skillName,
-          match_reason: "isSkillTentacle=true",
+      case "customize":
+        // Scene B: copy base skill, then Claude Code for local modifications
+        return this.spawnCustomize(params)
+
+      case "create":
+        // Scene C: no matching SKILL, generate from scratch
+        brainLogger.info("tentacle_creator_start", {
+          tentacle_id: params.tentacleId,
+          purpose: params.purpose,
         })
-        return this.spawnFromSkillTentacle(params, skill)
-      }
-      if (skill?.spawnable) {
-        return this.spawnFromLegacySkill(params)
-      }
+        return this.spawnFromScratch(params)
+
+      default:
+        return { success: false, errors: [`未知的部署模式：${(params as any).mode}`] }
     }
-
-    // Scene 2: Generate from scratch as skill_tentacle
-    brainLogger.info("tentacle_creator_start", {
-      tentacle_id: params.tentacleId,
-      purpose: params.purpose,
-    })
-    return this.spawnFromScratch(params)
-  }
-
-  // ── Direct path routing (skill_tentacle_path param) ──
-
-  private async spawnFromPath(params: SpawnParams): Promise<SpawnResult> {
-    const skillPath = params.skillTentaclePath!
-    let resolvedDir: string
-
-    try {
-      const stat = await fs.stat(skillPath)
-      if (stat.isDirectory()) {
-        resolvedDir = skillPath
-      } else if (skillPath.endsWith(".tentacle")) {
-        const packager = this.createPackager()
-        resolvedDir = await packager.install(skillPath)
-      } else {
-        return { success: false, errors: [`skill_tentacle_path 不是目录或 .tentacle 文件: ${skillPath}`] }
-      }
-    } catch (err: any) {
-      return { success: false, errors: [`skill_tentacle_path 无法访问: ${err.message}`] }
-    }
-
-    const skill = await this.skillLoader.loadSingle(resolvedDir)
-    if (!skill?.isSkillTentacle) {
-      return { success: false, errors: [`${resolvedDir} 不是有效的 skill_tentacle 目录（需要 SKILL.md + prompt/SYSTEM.md + src/ + README.md）`] }
-    }
-
-    brainLogger.info("skill_tentacle_matched", {
-      skill_name: skill.name,
-      match_reason: "skillTentaclePath",
-      path: resolvedDir,
-    })
-    return this.spawnFromSkillTentacle(params, skill)
   }
 
   // ── spawn + IPC register helper ──
@@ -200,21 +167,35 @@ export class SkillSpawner {
     return { success: true, pid: status?.pid }
   }
 
-  // ── Scene 1: Deploy community skill_tentacle (no code generation) ──
+  // ── Scene A: Deploy existing skill_tentacle (NO Claude Code — pure copy + setup + spawn) ──
 
-  private async spawnFromSkillTentacle(
-    params: SpawnParams,
-    skill: NonNullable<ReturnType<SkillLoader["get"]>>,
-  ): Promise<SpawnResult> {
+  private async spawnDeploy(params: SpawnParams): Promise<SpawnResult> {
+    // Resolve skill
+    let skill: NonNullable<ReturnType<SkillLoader["get"]>> | undefined
+
+    if (params.skillTentaclePath) {
+      const resolved = await this.resolveSkillFromPath(params.skillTentaclePath)
+      if (!resolved.success) return { success: false, errors: resolved.errors }
+      skill = resolved.skill!
+    } else if (params.skillName) {
+      const loaded = this.skillLoader.get(params.skillName)
+      if (!loaded?.isSkillTentacle) {
+        return { success: false, errors: [`skill_name "${params.skillName}" 不存在或不是 skill_tentacle。请检查 SKILL 名称。`] }
+      }
+      skill = loaded
+    } else {
+      return { success: false, errors: ["mode=deploy 需要 skill_name 或 skill_tentacle_path"] }
+    }
+
     const tentacleDir = path.join(this.tentacleManager.getTentacleBaseDir(), params.tentacleId)
-    let deployArtifact: CodeAgentSessionArtifact | undefined
 
     brainLogger.info("skill_tentacle_deploy_start", {
       tentacle_id: params.tentacleId,
       skill_name: skill.name,
+      mode: "deploy",
     })
 
-    // Step 1: Validate
+    // Step 1: Validate skill structure
     const validation = await SkillInspector.validateSkillTentacle(skill.path)
     if (!validation.valid) {
       brainLogger.error("skill_tentacle_deploy_failed", {
@@ -224,6 +205,7 @@ export class SkillSpawner {
       return { success: false, errors: validation.errors.map((e) => e.message) }
     }
 
+    // Step 2: Check prerequisites (required binaries, env vars)
     const prerequisiteErrors = await this.validateSkillTentaclePrerequisites(skill.name, skill.skillTentacleConfig)
     if (prerequisiteErrors.length > 0) {
       brainLogger.error("skill_tentacle_deploy_failed", {
@@ -234,10 +216,10 @@ export class SkillSpawner {
       return { success: false, errors: prerequisiteErrors }
     }
 
-    // Step 2: Copy to runtime directory
+    // Step 3: Copy source to runtime directory (exact copy, no modifications)
     await fs.cp(skill.path, tentacleDir, { recursive: true })
 
-    // Step 3: Inject user config and collect placeholder mapping
+    // Step 4: Inject user config (.env + prompt placeholders)
     let placeholderMapping: Record<string, string> = {}
     if (skill.skillTentacleConfig) {
       try {
@@ -257,19 +239,76 @@ export class SkillSpawner {
       }
     }
 
-    // Step 4: Claude Code deploy (minimal prompt — read README.md and execute)
-    try {
-      deployArtifact = await this.codeAgent.deployExisting(tentacleDir)
-    } catch (err: any) {
-      await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
-      brainLogger.error("skill_tentacle_deploy_failed", {
-        tentacle_id: params.tentacleId,
-        error: err.message,
-      })
-      return { success: false, errors: [`部署失败：${err.message}`] }
+    // Step 5: Execute setup_commands directly (NO Claude Code)
+    const setupCommands = skill.skillTentacleConfig?.setupCommands ?? []
+    const localPackagesDir = path.join(os.homedir(), ".openceph", "packages")
+
+    // Pre-install openceph-runtime from local source if only source fallback exists (no wheel/sdist)
+    // This handles the case where `openceph init` couldn't build a wheel due to network issues
+    const runtimeSrcDir = path.join(localPackagesDir, "openceph-runtime")
+    if (existsSync(path.join(runtimeSrcDir, "pyproject.toml"))) {
+      // Check if a wheel/sdist already exists — if so, --find-links will handle it
+      const hasDistFile = readdirSync(localPackagesDir).some(
+        (f) => f.startsWith("openceph_runtime") && (f.endsWith(".whl") || f.endsWith(".tar.gz")),
+      )
+      if (!hasDistFile) {
+        // Only source exists — find the venv pip and pre-install from source
+        const venvPipCandidates = setupCommands
+          .filter((c) => c.includes("pip install"))
+          .map((c) => c.split("pip install")[0] + "pip")
+          .map((p) => p.trim())
+        const venvPip = venvPipCandidates[0] || "venv/bin/pip"
+        try {
+          await execAsync(`${venvPip} install "${runtimeSrcDir}"`, {
+            cwd: tentacleDir,
+            timeout: 120_000,
+            env: { ...process.env, HOME: process.env.HOME },
+          })
+          systemLogger.info("openceph_runtime_preinstalled_from_source", { tentacleId: params.tentacleId })
+        } catch {
+          // Not fatal — the main pip install will report the actual error
+        }
+      }
     }
 
-    // Step 5: Write tentacle.json and prepare for spawn
+    for (const cmd of setupCommands) {
+      // For pip install commands, add --find-links so pip finds local openceph-runtime wheel/sdist
+      let actualCmd = cmd
+      if (cmd.includes("pip install") && !cmd.includes("--find-links")) {
+        actualCmd = cmd.replace("pip install", `pip install --find-links "${localPackagesDir}"`)
+      }
+      try {
+        await execAsync(actualCmd, {
+          cwd: tentacleDir,
+          timeout: 120_000,
+          env: { ...process.env, HOME: process.env.HOME },
+        })
+        systemLogger.info("setup_command_ok", { tentacleId: params.tentacleId, command: cmd })
+      } catch (err: any) {
+        // Abort immediately with clear error
+        await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
+        const hints: string[] = []
+        if (cmd.includes("python3")) hints.push("建议：请确认 python3 已安装（运行 which python3 检查）")
+        if (cmd.includes("pip install")) hints.push("建议：请检查 requirements.txt 中的包名是否正确")
+        brainLogger.error("skill_tentacle_deploy_failed", {
+          tentacle_id: params.tentacleId,
+          error: err.stderr || err.message,
+          phase: "setup_commands",
+          command: cmd,
+        })
+        return {
+          success: false,
+          errors: [
+            `部署中止：setup_command 执行失败`,
+            `命令：${cmd}`,
+            `错误：${(err.stderr || err.message || "").toString().slice(0, 500)}`,
+            ...hints,
+          ].filter(Boolean),
+        }
+      }
+    }
+
+    // Step 6: Write tentacle.json
     const trigger = skill.skillTentacleConfig?.defaultTrigger ?? "30m"
     await this.writeTentacleJson(params.tentacleId, tentacleDir, skill.skillTentacleConfig, {
       purpose: params.purpose,
@@ -290,7 +329,7 @@ export class SkillSpawner {
       skill_name: skill.name,
     })
 
-    // Step 6: Spawn process + wait for IPC registration
+    // Step 7: Spawn process + wait for IPC registration
     const spawnResult = await this.spawnAndRegister(params.tentacleId)
     if (!spawnResult.success) {
       brainLogger.error("skill_tentacle_deploy_failed", {
@@ -317,13 +356,207 @@ export class SkillSpawner {
       deployed: true,
       spawned: true,
       pid: spawnResult.pid,
+      source: `skill_tentacle:${skill.name}`,
+    }
+  }
+
+  // ── Scene B: Customize existing skill_tentacle (copy base + Claude Code local mods) ──
+
+  private async spawnCustomize(params: SpawnParams): Promise<SpawnResult> {
+    // First, resolve and load the skill
+    let skill: NonNullable<ReturnType<SkillLoader["get"]>> | undefined
+
+    if (params.skillTentaclePath) {
+      const resolved = await this.resolveSkillFromPath(params.skillTentaclePath)
+      if (!resolved.success) return { success: false, errors: resolved.errors }
+      skill = resolved.skill!
+    } else if (params.skillName) {
+      const loaded = this.skillLoader.get(params.skillName)
+      if (!loaded?.isSkillTentacle) {
+        return { success: false, errors: [`skill_name "${params.skillName}" 不存在或不是 skill_tentacle`] }
+      }
+      skill = loaded
+    } else {
+      return { success: false, errors: ["mode=customize 需要 skill_name 或 skill_tentacle_path"] }
+    }
+
+    const tentacleDir = path.join(this.tentacleManager.getTentacleBaseDir(), params.tentacleId)
+
+    brainLogger.info("skill_tentacle_customize_start", {
+      tentacle_id: params.tentacleId,
+      skill_name: skill.name,
+      brief: params.brief,
+    })
+
+    // Step 1: Validate
+    const validation = await SkillInspector.validateSkillTentacle(skill.path)
+    if (!validation.valid) {
+      return { success: false, errors: validation.errors.map((e) => e.message) }
+    }
+
+    const prerequisiteErrors = await this.validateSkillTentaclePrerequisites(skill.name, skill.skillTentacleConfig)
+    if (prerequisiteErrors.length > 0) {
+      return { success: false, errors: prerequisiteErrors }
+    }
+
+    // Step 2: Copy to runtime directory
+    await fs.cp(skill.path, tentacleDir, { recursive: true })
+
+    // Step 3: Inject user config
+    let placeholderMapping: Record<string, string> = {}
+    if (skill.skillTentacleConfig) {
+      try {
+        placeholderMapping = await this.injectUserConfig(tentacleDir, params.config ?? {}, skill.skillTentacleConfig)
+      } catch (err: any) {
+        await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
+        return { success: false, errors: [err.message] }
+      }
+    }
+
+    // Step 4: Snapshot source files before Claude Code touches them
+    const srcSnapshot = await this.snapshotDir(path.join(tentacleDir, "src"))
+
+    // Step 5: Claude Code customization (pass brief so it knows what to change)
+    let deployArtifact: CodeAgentSessionArtifact | undefined
+    try {
+      deployArtifact = await this.codeAgent.deployExisting(tentacleDir, { brief: params.brief })
+    } catch (err: any) {
+      await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
+      return { success: false, errors: [`定制化部署失败：${err.message}`] }
+    }
+
+    // Step 5b: Safety check — if Claude Code deleted critical files, restore them from snapshot
+    const srcAfter = await this.snapshotDir(path.join(tentacleDir, "src"))
+    const deletedFiles = srcSnapshot.filter((f) => !srcAfter.includes(f))
+    const addedFiles = srcAfter.filter((f) => !srcSnapshot.includes(f))
+
+    // Critical files that must survive customization
+    const CRITICAL_FILES = ["main.py", "ipc_client.py", "__init__.py", "index.ts", "index.js"]
+    const deletedCritical = deletedFiles.filter((f) => CRITICAL_FILES.includes(path.basename(f)))
+
+    if (deletedCritical.length > 0) {
+      brainLogger.warn("code_agent_destructive_customize", {
+        tentacle_id: params.tentacleId,
+        deleted: deletedFiles,
+        added: addedFiles,
+        restored_critical: deletedCritical,
+      })
+      // Restore critical files from the original skill source
+      // relFile is relative to src/, e.g. "main.py" — must prepend "src/" for full path
+      for (const relFile of deletedCritical) {
+        const srcFile = path.join(skill.path, "src", relFile)
+        const destFile = path.join(tentacleDir, "src", relFile)
+        try {
+          await fs.mkdir(path.dirname(destFile), { recursive: true })
+          await fs.copyFile(srcFile, destFile)
+          systemLogger.info("critical_file_restored", { tentacleId: params.tentacleId, file: relFile })
+        } catch (restoreErr: any) {
+          // If we can't restore a critical file, abort the deployment
+          await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
+          return {
+            success: false,
+            errors: [
+              `定制化部署中止：Claude Code 删除了关键文件 ${path.basename(relFile)} 且无法恢复`,
+              `原始错误：${restoreErr.message}`,
+            ],
+          }
+        }
+      }
+    } else if (deletedFiles.length > addedFiles.length) {
+      brainLogger.warn("code_agent_excessive_deletions", {
+        tentacle_id: params.tentacleId,
+        deleted: deletedFiles,
+        added: addedFiles,
+      })
+    }
+
+    // Step 6: Write tentacle.json
+    const trigger = skill.skillTentacleConfig?.defaultTrigger ?? "30m"
+    await this.writeTentacleJson(params.tentacleId, tentacleDir, skill.skillTentacleConfig, {
+      purpose: params.purpose,
+      trigger,
+      skillName: skill.name,
+      source: `skill_tentacle:${skill.name}:customized`,
+      placeholderMapping,
+    })
+
+    // Step 7: Spawn + register
+    const spawnResult = await this.spawnAndRegister(params.tentacleId)
+    if (!spawnResult.success) {
+      return { success: false, errors: [spawnResult.error ?? "IPC registration failed"] }
+    }
+
+    return {
+      success: true,
+      tentacleId: params.tentacleId,
+      skillName: skill.name,
+      runtime: skill.skillTentacleConfig?.runtime,
+      directory: tentacleDir,
+      trigger,
+      description: skill.description,
+      deployed: true,
+      spawned: true,
+      pid: spawnResult.pid,
       codeAgentSessionFile: deployArtifact?.sessionFile,
       codeAgentWorkDir: deployArtifact?.workDir,
       codeAgentLogsDir: deployArtifact?.logsDir,
       codeAgentTerminalLog: deployArtifact?.terminalLog,
       codeAgentStdoutLog: deployArtifact?.stdoutLog,
       codeAgentStderrLog: deployArtifact?.stderrLog,
-      source: `skill_tentacle:${skill.name}`,
+      source: `skill_tentacle:${skill.name}:customized`,
+    }
+  }
+
+  // ── Helper: Resolve skill from path ──
+
+  private async resolveSkillFromPath(skillPath: string): Promise<{
+    success: boolean
+    skill?: NonNullable<ReturnType<SkillLoader["get"]>>
+    errors?: string[]
+  }> {
+    let resolvedDir: string
+    try {
+      const stat = await fs.stat(skillPath)
+      if (stat.isDirectory()) {
+        resolvedDir = skillPath
+      } else if (skillPath.endsWith(".tentacle")) {
+        const packager = this.createPackager()
+        resolvedDir = await packager.install(skillPath)
+      } else {
+        return { success: false, errors: [`skill_tentacle_path 不是目录或 .tentacle 文件: ${skillPath}`] }
+      }
+    } catch (err: any) {
+      return { success: false, errors: [`skill_tentacle_path 无法访问: ${err.message}`] }
+    }
+
+    const skill = await this.skillLoader.loadSingle(resolvedDir)
+    if (!skill?.isSkillTentacle) {
+      return { success: false, errors: [`${resolvedDir} 不是有效的 skill_tentacle 目录`] }
+    }
+    return { success: true, skill }
+  }
+
+  // ── Helper: Snapshot file list in a directory ──
+
+  private async snapshotDir(dirPath: string): Promise<string[]> {
+    try {
+      const files: string[] = []
+      const walk = async (dir: string, prefix: string) => {
+        const entries = await fs.readdir(dir, { withFileTypes: true })
+        for (const entry of entries) {
+          const relPath = prefix ? `${prefix}/${entry.name}` : entry.name
+          if (entry.isDirectory()) {
+            if (["venv", "node_modules", "__pycache__", ".git"].includes(entry.name)) continue
+            await walk(path.join(dir, entry.name), relPath)
+          } else {
+            files.push(relPath)
+          }
+        }
+      }
+      await walk(dirPath, "")
+      return files
+    } catch {
+      return []
     }
   }
 
@@ -343,11 +576,7 @@ export class SkillSpawner {
       lastCodeAgentArtifact = await this.codeAgent.generateSkillTentacle({
         tentacleId: params.tentacleId,
         purpose: params.purpose,
-        workflow: params.workflow,
-        capabilities: params.capabilities ?? [],
-        reportStrategy: params.reportStrategy ?? "积攒有价值信息后批量上报大脑",
-        infrastructure: params.infrastructure,
-        externalApis: params.externalApis,
+        brief: params.brief ?? "",
         preferredRuntime: (params.preferredRuntime as CodeAgentRequirement["preferredRuntime"]) ?? "auto",
         userContext: await this.loadUserContext(),
       })
@@ -575,11 +804,8 @@ export class SkillSpawner {
       directory = await this.deployer.deploy(params.tentacleId, generated, {
         purpose: params.purpose,
         trigger,
-        dataSources: params.externalApis,
         skillName: params.skillName,
-        workflow: params.workflow,
-        capabilities: params.capabilities,
-        reportStrategy: params.reportStrategy,
+        brief: params.brief,
       })
     } catch (error: any) {
       systemLogger.error("spawn_deploy_failed", {
@@ -758,9 +984,15 @@ export class SkillSpawner {
       skillName?: string
       source?: string
       placeholderMapping?: Record<string, string>
+      capabilities?: Record<string, unknown>
     },
   ): Promise<void> {
     const entryCommand = await this.detectEntryCommand(tentacleDir, config)
+
+    // Normalize trigger to compact format: "every 2 hours" → "2h"
+    const rawTrigger = metadata?.trigger ?? "6h"
+    const parsed = parseDefaultTrigger(rawTrigger)
+    const normalizedTrigger = parsed.kind === "self" ? parsed.interval : rawTrigger
 
     await fs.writeFile(path.join(tentacleDir, "tentacle.json"), JSON.stringify({
       tentacleId,
@@ -769,14 +1001,17 @@ export class SkillSpawner {
       entryCommand,
       cwd: tentacleDir,
       source: metadata?.source ?? "skill_tentacle",
-      trigger: metadata?.trigger ?? "manual",
+      trigger: normalizedTrigger,
       createdAt: new Date().toISOString(),
       scheduleConfig: {
-        primaryTrigger: { type: "self-schedule", interval: metadata?.trigger ?? "6h" },
+        primaryTrigger: parsed.kind === "self"
+          ? { type: "self-schedule", interval: normalizedTrigger }
+          : { type: "cron", expr: parsed.expr },
         cronJobs: [],
       },
       skillName: metadata?.skillName,
       placeholderMapping: metadata?.placeholderMapping ?? {},
+      capabilities: metadata?.capabilities ?? config?.capabilities ?? { daemon: [], agent: [], consultation: { mode: "batch" } },
     }, null, 2), "utf-8")
   }
 
@@ -830,11 +1065,7 @@ export class SkillSpawner {
     return {
       tentacleId: params.tentacleId,
       purpose: params.purpose,
-      workflow: params.workflow,
-      capabilities: params.capabilities ?? [],
-      reportStrategy: params.reportStrategy ?? "Report accumulated findings in batch when 3+ items ready",
-      infrastructure: params.infrastructure,
-      externalApis: params.externalApis,
+      brief: params.brief ?? "",
       preferredRuntime: (params.preferredRuntime as CodeAgentRequirement["preferredRuntime"]) ?? "auto",
       skillContext,
       userContext,

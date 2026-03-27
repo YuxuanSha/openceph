@@ -9,6 +9,11 @@
             "date": 1774096072742,
             "name": "~/.openceph/logs/system-2026-03-21.log",
             "hash": "cedfc065da90a5763c0cf2d0d0f3fe9b184c032e697c35922c7a0f72d0c7c2ee"
+        },
+        {
+            "date": 1774541196804,
+            "name": "~/.openceph/logs/system-2026-03-27.log",
+            "hash": "2b7d9f4d61b6b71d71a10208296957c0169b35d83594ab6b8ed900328c2b0f02"
         }
     ],
     "hashType": "sha256"

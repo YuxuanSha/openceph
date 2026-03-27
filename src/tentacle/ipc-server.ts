@@ -46,8 +46,9 @@ export class IpcServer {
           if (!line) continue
           try {
             const message = JSON.parse(line) as IpcMessage
+            const senderId = message.tentacle_id ?? message.sender ?? ""
             if (message.type === "tentacle_register") {
-              this.connections.set(message.sender, {
+              this.connections.set(senderId, {
                 transport: "socket",
                 write: (lineToSend: string) =>
                   new Promise<void>((resolve, reject) => {
@@ -58,9 +59,9 @@ export class IpcServer {
                   }),
                 close: () => socket.destroy(),
               })
-              this.socketToTentacle.set(socket, message.sender)
+              this.socketToTentacle.set(socket, senderId)
             }
-            void this.messageHandler?.(message.sender, message)
+            void this.messageHandler?.(senderId, message)
           } catch {
             // ignore malformed messages and keep the socket open
           }

@@ -19,9 +19,38 @@ import { HeartbeatScheduler } from "./heartbeat/scheduler.js"
 import { MemoryManager } from "./memory/memory-manager.js"
 import { SessionStoreManager } from "./session/session-store.js"
 import * as fs from "fs/promises"
-import { existsSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, copyFileSync } from "fs"
 import * as path from "path"
 import * as os from "os"
+
+const TEMPLATE_VERSION = "1.0.2"
+
+function migrateWorkspaceTemplates(): void {
+  const OPENCEPH_HOME = path.join(os.homedir(), ".openceph")
+  const workspaceDest = path.join(OPENCEPH_HOME, "workspace")
+  if (!existsSync(workspaceDest)) return
+
+  const workspaceSrc = path.join(__dirname, "templates", "workspace")
+  const workspaceSrcAlt = path.join(__dirname, "..", "src", "templates", "workspace")
+  const actualWorkspaceSrc = existsSync(workspaceSrc) ? workspaceSrc : existsSync(workspaceSrcAlt) ? workspaceSrcAlt : null
+  if (!actualWorkspaceSrc) return
+
+  const versionFile = path.join(workspaceDest, ".template-version")
+  let currentVersion = ""
+  try { currentVersion = readFileSync(versionFile, "utf-8").trim() } catch {}
+  if (currentVersion === TEMPLATE_VERSION) return
+
+  // NOT migrated: USER.md, MEMORY.md (user data), TOOLS.md (auto-generated), TENTACLES.md (live registry)
+  const managedFiles = ["AGENTS.md", "SOUL.md", "CONSULTATION.md", "HEARTBEAT.md", "IDENTITY.md", "BOOTSTRAP.md"]
+  for (const file of managedFiles) {
+    const src = path.join(actualWorkspaceSrc, file)
+    const dest = path.join(workspaceDest, file)
+    if (existsSync(src)) {
+      copyFileSync(src, dest)
+    }
+  }
+  writeFileSync(versionFile, TEMPLATE_VERSION, "utf-8")
+}
 
 export async function startOpenCeph(): Promise<void> {
   // 0. Set up proxy (must be before any API calls)
@@ -33,6 +62,13 @@ export async function startOpenCeph(): Promise<void> {
 
   // 2. Init loggers
   initLoggers(config)
+
+  // 2.5 Migrate workspace templates for existing installations
+  try {
+    migrateWorkspaceTemplates()
+  } catch (err) {
+    systemLogger.warn("template_migration_failed", { error: err instanceof Error ? err.message : String(err) })
+  }
 
   // 3. Create Pi context
   const piCtx = await createPiContext(config)

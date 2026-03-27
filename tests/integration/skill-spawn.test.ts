@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import * as fs from "fs"
 import * as path from "path"
 import * as os from "os"
@@ -6,6 +6,7 @@ import { initLoggers } from "../../src/logger/index.js"
 import { SkillLoader } from "../../src/skills/skill-loader.js"
 import { SkillSpawner } from "../../src/skills/skill-spawner.js"
 import { CodeAgent } from "../../src/code-agent/code-agent.js"
+import { TentacleValidator } from "../../src/code-agent/validator.js"
 import { IpcServer } from "../../src/tentacle/ipc-server.js"
 import { TentacleRegistry } from "../../src/tentacle/registry.js"
 import { PendingReportsQueue } from "../../src/tentacle/pending-reports.js"
@@ -65,9 +66,48 @@ while True: time.sleep(1)
     const manager = new TentacleManager(config, ipc, new TentacleRegistry(path.join(dir, "workspace")), queue)
     const loader = new SkillLoader([path.join(dir, "skills")])
     const codeAgent = new CodeAgent({} as any, config)
+    // Mock generateSkillTentacle to simulate Claude Code generating files
+    const tentacleDir = manager.getTentacleDir("t_ph_monitor")
+    codeAgent.generateSkillTentacle = vi.fn(async () => {
+      fs.mkdirSync(path.join(tentacleDir, "prompt"), { recursive: true })
+      fs.mkdirSync(path.join(tentacleDir, "src"), { recursive: true })
+      fs.writeFileSync(path.join(tentacleDir, "SKILL.md"), `---\nname: t_ph_monitor\nmetadata:\n  openceph:\n    tentacle:\n      spawnable: true\n      runtime: python\n      entry: src/main.py\n---\n`)
+      fs.writeFileSync(path.join(tentacleDir, "README.md"), "# ProductHunt Monitor\n## Start Command\n```bash\npython3 src/main.py\n```\n")
+      fs.writeFileSync(path.join(tentacleDir, "prompt", "SYSTEM.md"), "# Identity\nYou are a ProductHunt monitor.\n\n# Mission\nMonitor Product Hunt for new AI products.")
+      fs.writeFileSync(path.join(tentacleDir, "src", "main.py"), productDir + "/scripts/monitor.py content placeholder")
+      return {
+        sessionFile: path.join(dir, "claude-session.jsonl"),
+        workDir: dir,
+        logsDir: path.join(dir, "agent-logs"),
+        terminalLog: path.join(dir, "agent-logs", "terminal.log"),
+        stdoutLog: path.join(dir, "agent-logs", "stdout.log"),
+        stderrLog: path.join(dir, "agent-logs", "stderr.log"),
+        elapsedMs: 500,
+        turnCount: 1,
+        toolCalls: [],
+      }
+    }) as any
+    codeAgent.fixSkillTentacle = vi.fn() as any
+    codeAgent.deployExisting = vi.fn().mockResolvedValue(undefined) as any
+    // Mock manager spawn/register to avoid real process start
+    vi.spyOn(manager, "spawn").mockResolvedValue(undefined)
+    vi.spyOn(manager, "waitForRegistration").mockResolvedValue(true)
+    vi.spyOn(manager, "getStatus").mockReturnValue({ pid: 99999 } as any)
+    // Mock validator to always pass (this test focuses on spawn flow, not contract validation)
+    vi.spyOn(TentacleValidator.prototype, "validateSkillTentacle").mockResolvedValue({
+      passed: true,
+      checks: {
+        structure: { passed: true, errors: [], warnings: [] },
+        syntax: { passed: true, errors: [], warnings: [] },
+        contract: { passed: true, errors: [], warnings: [] },
+        security: { passed: true, errors: [], warnings: [] },
+        smoke: { passed: true, errors: [], warnings: [] },
+      },
+    } as any)
     const spawner = new SkillSpawner(config, loader, manager, codeAgent)
 
     const result = await spawner.spawn({
+      mode: "create",
       skillName: "producthunt-monitor",
       tentacleId: "t_ph_monitor",
       purpose: "monitor Product Hunt",
@@ -75,11 +115,8 @@ while True: time.sleep(1)
       userConfirmed: true,
     })
     expect(result.tentacleId).toBe("t_ph_monitor")
-    expect(result.runtime).toBeTruthy()
-    expect(result.description).toBeTruthy()
-    expect(result.spawned).toBe(false)
-    expect(result.deployed).toBe(true)
-    expect(fs.existsSync(path.join(manager.getTentacleDir("t_ph_monitor"), "tentacle.json"))).toBe(true)
+    expect(result.success).toBe(true)
+    expect(fs.existsSync(path.join(tentacleDir, "tentacle.json"))).toBe(true)
     await ipc.stop()
   }, 20_000)
 })

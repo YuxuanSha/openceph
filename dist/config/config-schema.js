@@ -209,6 +209,11 @@ export const OpenCephConfigSchema = z.object({
             mode: z.enum(["token", "none"]),
             token: z.string().optional(),
         }),
+        rateLimit: z.object({
+            maxRequestsPerMinute: z.number().default(60),
+            maxRequestsPerTentacle: z.number().default(20),
+        }).optional().default({ maxRequestsPerMinute: 60, maxRequestsPerTentacle: 20 }),
+        costTracking: z.boolean().default(true),
     }),
     agents: z.object({
         defaults: z.object({

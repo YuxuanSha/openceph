@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 30
+    },
+    "auditLog": "~/.openceph/agents/code-agent/logs/.11a4cdb18ce1e561c1b035b0980a211c00a24c95-audit.json",
+    "files": [
+        {
+            "date": 1774541196808,
+            "name": "~/.openceph/agents/code-agent/logs/events-2026-03-27.log",
+            "hash": "76aae142fc7eb7e9b87ebc7b66d79b327690458c765c1d01bc381a0622d3fd62"
+        }
+    ],
+    "hashType": "sha256"
+}

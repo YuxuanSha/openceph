@@ -30,6 +30,7 @@ export interface ToolCallRecord {
     name: string;
     success: boolean;
     durationMs?: number;
+    args?: Record<string, unknown>;
 }
 export interface BrainOutput {
     text: string;
@@ -85,10 +86,16 @@ export declare class Brain {
     private readonly deliverToUser?;
     private readonly memoryManager;
     private readonly consultationStore;
+    private consultationSessionManager;
     private readonly pushMessageToConsultationSession;
     constructor(options: BrainOptions);
     initialize(): Promise<void>;
-    /** Write TOOLS.md to workspace dir based on actually registered tools */
+    /**
+     * Write TOOLS.md to workspace dir.
+     * Strategy: Load the template TOOLS.md (which contains detailed guidance),
+     * then append any registered tools not mentioned in the template.
+     * This preserves the hand-written "when to use / when not to use" guidance.
+     */
     private syncToolsMd;
     /** Register additional tools (e.g. MCP tools discovered after Brain construction) */
     registerTools(entries: import("../tools/index.js").ToolRegistryEntry[]): Promise<void>;
@@ -100,6 +107,7 @@ export declare class Brain {
         model?: string;
         mode?: "full" | "minimal";
         thinking?: string;
+        systemPromptOverride?: string;
     }): Promise<BrainOutput>;
     registerCronScheduler(cronScheduler: CronScheduler): Promise<void>;
     registerHeartbeatScheduler(heartbeatScheduler: HeartbeatScheduler): void;

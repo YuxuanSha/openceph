@@ -158,7 +158,7 @@ export function createTentacleTools(
   const listTentacles: ToolDefinition = {
     name: "list_tentacles",
     label: "List Tentacles",
-    description: "列出所有触手及其状态",
+    description: "列出当前所有触手的状态。部署后确认触手是否成功上线时用这个。",
     parameters: Type.Object({
       status_filter: Type.Optional(Type.Union([
         Type.Literal("all"),
@@ -171,7 +171,9 @@ export function createTentacleTools(
         Type.Literal("weakened"),
         Type.Literal("killed"),
         Type.Literal("crashed"),
-      ])),
+      ], {
+        description: "按状态过滤。合法值：all / active / running / registered / deploying / pending / paused / weakened / killed / crashed。不确定就用 all。",
+      })),
     }),
     async execute(_id, params: any) {
       const filter = params.status_filter ?? "all"
@@ -208,7 +210,12 @@ export function createTentacleTools(
   const manageTentacle: ToolDefinition = {
     name: "manage_tentacle",
     label: "Manage Tentacle",
-    description: "暂停、恢复、关闭、削弱、增强、合并或立即触发触手",
+    description: `管理触手的运行状态。
+    pause: 暂停（仅 running 状态可用）
+    resume: 恢复（仅 paused 状态可用）
+    kill: 停止（running 或 paused 可用）
+    run_now: 立即触发一次执行（仅 running 状态可用）
+    注意：killed 的触手不能 resume，需要重新 spawn_from_skill。`,
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("pause"),
@@ -451,7 +458,7 @@ export function createTentacleTools(
   const inspectTentacleLog: ToolDefinition = {
     name: "inspect_tentacle_log",
     label: "Inspect Tentacle Log",
-    description: "查看触手日志尾部内容",
+    description: "查看触手的运行日志。触手出问题时优先用这个看具体错误，比 web_search 有用得多。",
     parameters: Type.Object({
       tentacle_id: Type.String(),
       n_lines: Type.Optional(Type.Number({ default: 50 })),
@@ -494,61 +501,71 @@ export function createTentacleTools(
   const spawnFromSkill: ToolDefinition = {
     name: "spawn_from_skill",
     label: "Spawn Tentacle",
-    description: "创建并部署新的触手 Agent 系统。skill_tentacle 直接部署（不生成代码）；有 SKILL 蓝图时作为 context 定制生成；无 SKILL 时按 skill_tentacle 规范从零生成。",
+    description: "创建并部署新的触手 Agent 系统。deploy 模式直接部署（不生成代码）；customize 模式基于已有 SKILL 修改逻辑；create 模式从零生成。",
     parameters: Type.Object({
-      skill_name: Type.Optional(Type.String({ description: "SKILL 名称。有值时走场景一（部署已有 skill_tentacle）或兼容旧式 SKILL；无值时走场景二（从零生成）" })),
-      tentacle_id: Type.String({ description: "触手 ID，格式 t_{slug}" }),
-      purpose: Type.String({ description: "触手使命（一句话）" }),
-      workflow: Type.String({ description: "工作流描述（自然语言）" }),
-      capabilities: Type.Optional(Type.Array(Type.String())),
-      report_strategy: Type.Optional(Type.String({ description: "什么情况下上报大脑" })),
-      infrastructure: Type.Optional(Type.Object({
-        needsHttpServer: Type.Optional(Type.Boolean()),
-        needsDatabase: Type.Optional(Type.Boolean()),
-        needsExternalBot: Type.Optional(Type.Object({
-          platform: Type.String(),
-          purpose: Type.String(),
-        })),
-        needsLlm: Type.Optional(Type.Boolean()),
-        needsFileStorage: Type.Optional(Type.Boolean()),
+      // ── 结构化字段（代码层必须用的硬信息）──
+      tentacle_id: Type.String({
+        description: "新触手 ID，格式 t_{简短英文标识}，如 t_hn_radar、t_arxiv_scout",
+      }),
+      skill_name: Type.Optional(Type.String({
+        description: "匹配的 SKILL 名称。场景 A/B 必填，场景 C 不填。",
       })),
-      external_apis: Type.Optional(Type.Array(Type.String())),
+      mode: Type.Union([
+        Type.Literal("deploy"),
+        Type.Literal("customize"),
+        Type.Literal("create"),
+      ], {
+        description: `部署模式——你需要自己判断：
+      deploy: 有现成 SKILL，代码不用改，只需要调配置。大多数内置触手部署用这个。
+      customize: 有现成 SKILL 但用户要改代码逻辑（加功能、改算法、换数据源）。
+      create: 没有匹配的 SKILL，需要从零开始。`,
+      }),
+      purpose: Type.String({
+        description: "触手的使命，一句话说清楚它是干什么的。",
+      }),
+      config: Type.Optional(Type.Record(Type.String(), Type.String(), {
+        description: "配置参数，key 对应 SKILL.md 中 customizable 字段的 env_var 名称。场景 A 用这个传用户偏好。",
+      })),
+
+      // ── 自由文本字段（Brain 写给 Claude Code 的需求描述）──
+      brief: Type.Optional(Type.String({
+        description: `场景 B/C 的需求描述。你用自然语言写，像给一个工程师交代任务一样。
+      应该包含：用户是谁、想要什么、数据源是什么、触发频率、特殊要求。
+      场景 A 不需要填（配置通过 config 字段传递）。
+      场景 B 要说清楚在现有 SKILL 基础上改什么。
+      场景 C 要完整描述触手的使命和工作方式。`,
+      })),
+
       preferred_runtime: Type.Optional(Type.String({ default: "auto" })),
-      ask_user_confirm: Type.Optional(Type.Boolean({ default: true })),
+
       // M4 additions
       skill_tentacle_path: Type.Optional(Type.String({
         description: "直接指向本地 skill_tentacle 目录或 .tentacle 文件路径，跳过 skill 搜索",
       })),
       package_after: Type.Optional(Type.Boolean({
-        description: "场景二完成后是否打包为可分享的 skill_tentacle",
+        description: "场景 C 完成后是否打包为可分享的 skill_tentacle",
         default: false,
-      })),
-      config: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
-        description: "用户个性化配置（场景一时传入 customizable 字段值）",
       })),
     }),
     async execute(_id, params: any) {
-      void params.ask_user_confirm
       try {
         brainLogger.info("skill_spawn_start", {
           tentacle_id: params.tentacle_id,
           skill_name: params.skill_name ?? "none",
+          mode: params.mode,
           purpose: params.purpose,
         })
         const spawnParams: SpawnParams = {
+          mode: params.mode,
           skillName: params.skill_name,
           tentacleId: params.tentacle_id,
           purpose: params.purpose,
-          workflow: params.workflow,
-          capabilities: params.capabilities,
-          reportStrategy: params.report_strategy,
-          infrastructure: params.infrastructure,
-          externalApis: params.external_apis,
           preferredRuntime: params.preferred_runtime ?? "auto",
           userConfirmed: true,
           skillTentaclePath: params.skill_tentacle_path,
           packageAfter: params.package_after,
           config: params.config,
+          brief: params.brief,
         }
         const result = await skillSpawner.spawn(spawnParams)
         if (result.success) {

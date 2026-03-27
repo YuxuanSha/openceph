@@ -7,11 +7,8 @@ import type { TentacleScheduleConfig } from "../tentacle/tentacle-schedule.js"
 export interface DeployMetadata {
   purpose?: string
   trigger?: string
-  dataSources?: string[]
   skillName?: string
-  workflow?: string
-  capabilities?: string[]
-  reportStrategy?: string
+  brief?: string
 }
 
 export class TentacleDeployer {
@@ -72,13 +69,9 @@ export class TentacleDeployer {
       cwd: targetDir,
       source: metadata?.skillName ? `skill:${metadata.skillName}` : "code-agent",
       trigger: metadata?.trigger ?? "manual",
-      dataSources: metadata?.dataSources ?? [],
       createdAt: new Date().toISOString(),
       scheduleConfig: buildScheduleConfig(metadata?.trigger),
-      // M3 extended metadata
-      workflow: metadata?.workflow,
-      capabilities: metadata?.capabilities,
-      reportStrategy: metadata?.reportStrategy,
+      brief: metadata?.brief,
       envVars: code.envVars,
       ports: code.ports,
       description: code.description,

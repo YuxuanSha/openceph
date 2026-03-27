@@ -21,9 +21,15 @@ export async function assembleSystemPrompt(workspaceDir, options, toolRegistry) 
         // Section 4: Skills (mark skill_tentacle type)
         sections.push(options.skillsSummary ? `# Skills\n${options.skillsSummary}` : "# Skills\nNo skills loaded in current session.");
         // Section 5: Tentacle Awareness
+        const tentacleGuidance = [
+            "",
+            "想了解某个触手的详细进度，read 它的 workspace/STATUS.md。",
+            "想看触手的运行日志，用 inspect_tentacle_log。",
+            "部署和管理触手的完整规程在你的 AGENTS.md 里。",
+        ].join("\n");
         sections.push(options.tentacleSummary
-            ? `# Active Tentacles\n${options.tentacleSummary}`
-            : "# Tentacles\nNo active tentacles.");
+            ? `# Active Tentacles\n${options.tentacleSummary}${tentacleGuidance}`
+            : `# Tentacles\nNo active tentacles.${tentacleGuidance}`);
     }
     // Section 6: Workspace
     sections.push(`# Workspace\nWorkspace directory: ${workspaceDir}`);

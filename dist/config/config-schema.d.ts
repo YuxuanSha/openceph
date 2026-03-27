@@ -17,6 +17,11 @@ export declare const OpenCephConfigSchema: z.ZodObject<{
             }>;
             token: z.ZodOptional<z.ZodString>;
         }, z.core.$strip>;
+        rateLimit: z.ZodDefault<z.ZodOptional<z.ZodObject<{
+            maxRequestsPerMinute: z.ZodDefault<z.ZodNumber>;
+            maxRequestsPerTentacle: z.ZodDefault<z.ZodNumber>;
+        }, z.core.$strip>>>;
+        costTracking: z.ZodDefault<z.ZodBoolean>;
     }, z.core.$strip>;
     agents: z.ZodObject<{
         defaults: z.ZodObject<{

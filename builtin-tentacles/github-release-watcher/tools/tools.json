@@ -1,0 +1,19 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "check_repo_releases",
+        "description": "Check a GitHub repository for new releases",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "repo": { "type": "string", "description": "GitHub repo in owner/name format" },
+            "include_prereleases": { "type": "boolean", "description": "Include pre-release versions", "default": false }
+          },
+          "required": ["repo"]
+        }
+      }
+    }
+  ]
+}

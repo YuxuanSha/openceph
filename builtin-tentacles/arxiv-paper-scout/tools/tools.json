@@ -1,0 +1,33 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search_arxiv",
+        "description": "Search arXiv for papers by category and keywords",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "categories": { "type": "string", "description": "Comma-separated arXiv categories (e.g. cs.AI,cs.CL)" },
+            "query": { "type": "string", "description": "Keyword search query" }
+          },
+          "required": ["categories"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "fetch_paper_details",
+        "description": "Fetch full metadata for a specific arXiv paper by ID",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "paper_id": { "type": "string", "description": "arXiv paper ID (e.g. 2403.12345)" }
+          },
+          "required": ["paper_id"]
+        }
+      }
+    }
+  ]
+}

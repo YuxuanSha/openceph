@@ -28,16 +28,7 @@ export function createCodeTools(opts: {
     parameters: Type.Object({
       tentacle_id: Type.String(),
       purpose: Type.String({ description: "触手使命" }),
-      workflow: Type.Optional(Type.String({ description: "工作流描述" })),
-      capabilities: Type.Optional(Type.Array(Type.String())),
-      report_strategy: Type.Optional(Type.String()),
-      infrastructure: Type.Optional(Type.Object({
-        needsHttpServer: Type.Optional(Type.Boolean()),
-        needsDatabase: Type.Optional(Type.Boolean()),
-        needsLlm: Type.Optional(Type.Boolean()),
-        needsFileStorage: Type.Optional(Type.Boolean()),
-      })),
-      external_apis: Type.Optional(Type.Array(Type.String())),
+      brief: Type.Optional(Type.String({ description: "需求描述，自然语言写清楚要什么" })),
       preferred_runtime: Type.Optional(Type.Union([
         Type.Literal("python"),
         Type.Literal("typescript"),
@@ -55,11 +46,7 @@ export function createCodeTools(opts: {
         const requirement: CodeAgentRequirement = {
           tentacleId: params.tentacle_id,
           purpose: params.purpose,
-          workflow: params.workflow ?? params.purpose,
-          capabilities: params.capabilities ?? [],
-          reportStrategy: params.report_strategy ?? "Report findings in batch when 3+ items accumulated",
-          infrastructure: params.infrastructure,
-          externalApis: params.external_apis,
+          brief: params.brief ?? "",
           preferredRuntime: params.preferred_runtime ?? "auto",
           userContext: "",
         }
@@ -71,9 +58,7 @@ export function createCodeTools(opts: {
         try {
           directory = await deployer.deploy(params.tentacle_id, generated, {
             purpose: requirement.purpose,
-            workflow: requirement.workflow,
-            capabilities: requirement.capabilities,
-            reportStrategy: requirement.reportStrategy,
+            brief: requirement.brief,
           })
         } catch (error: any) {
           deployError = error.message

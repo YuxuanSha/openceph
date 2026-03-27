@@ -20,7 +20,7 @@ describe("builtin tentacle install and upgrade", () => {
     const installed = fs.readdirSync(dir).sort()
     const source = fs.readdirSync(getBuiltinTentaclesDir()).sort()
     expect(installed).toEqual(source)
-    expect(installed).toHaveLength(7)
+    expect(installed).toHaveLength(10)
   })
 
   it("skips existing builtin tentacles on init", async () => {
