@@ -286,18 +286,26 @@ export interface LlmResponse {
 export class LlmClient {
   private baseUrl: string
   private token: string
+  private defaultModel: string
 
   constructor() {
     this.baseUrl = process.env.OPENCEPH_LLM_GATEWAY_URL || "http://127.0.0.1:18792"
+    // Normalize: strip trailing /v1 so we can always append /v1/chat/completions
+    this.baseUrl = this.baseUrl.replace(/\/+$/, "")
+    if (this.baseUrl.endsWith("/v1")) {
+      this.baseUrl = this.baseUrl.slice(0, -3)
+    }
     this.token = process.env.OPENCEPH_LLM_GATEWAY_TOKEN || ""
+    this.defaultModel = process.env.OPENCEPH_LLM_MODEL || "default"
   }
 
   async chat(
     messages: Array<{ role: string; content: string }>,
     opts?: { model?: string; tools?: unknown[]; temperature?: number },
   ): Promise<LlmResponse> {
+    const resolvedModel = (opts?.model && opts.model !== "default") ? opts.model : this.defaultModel
     const body: Record<string, unknown> = {
-      model: opts?.model || "default",
+      model: resolvedModel,
       messages,
       temperature: opts?.temperature ?? 0.3,
     }

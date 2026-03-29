@@ -168,6 +168,7 @@ export interface ConsultationReplyPayload {
   next_action?: "await_user" | "await_tentacle" | "none"
   // New protocol fields (optional for backward compat)
   consultation_id?: string
+  client_request_id?: string  // original request_id from the tentacle's consultation_request
   message?: string
   actions_taken?: Array<{
     action: ConsultationAction
@@ -201,6 +202,7 @@ export interface ConsultationEndPayload {
 
 export interface ConsultationClosePayload {
   consultation_id: string
+  client_request_id?: string  // original request_id from the tentacle's consultation_request
   summary: string
   pushed_count: number
   discarded_count: number

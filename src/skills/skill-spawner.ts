@@ -102,6 +102,18 @@ export class SkillSpawner {
     this.deployer = new TentacleDeployer(tentacleManager.getTentacleBaseDir())
   }
 
+  /**
+   * Ensure a tentacle is stopped before overwriting its directory.
+   * Prevents orphaned processes and stale registry entries.
+   */
+  private async ensureTentacleStopped(tentacleId: string): Promise<void> {
+    const status = this.tentacleManager.getStatus(tentacleId)
+    if (status && ["running", "paused", "registered"].includes(status.status)) {
+      await this.tentacleManager.kill(tentacleId, "redeploying")
+      brainLogger.info("killed_existing_tentacle_before_redeploy", { tentacle_id: tentacleId })
+    }
+  }
+
   private createPackager(): TentaclePackager {
     return new TentaclePackager(this.config.skillTentacle?.packExclude)
   }
@@ -216,7 +228,17 @@ export class SkillSpawner {
       return { success: false, errors: prerequisiteErrors }
     }
 
-    // Step 3: Copy source to runtime directory (exact copy, no modifications)
+    // Step 3: Kill existing tentacle if running, clean target dir, then copy source
+    await this.ensureTentacleStopped(params.tentacleId)
+    // Clear target directory but preserve data/reports/logs (historical state)
+    const preserveDirs = new Set(["data", "reports", "logs", "venv"])
+    if (existsSync(tentacleDir)) {
+      for (const entry of await fs.readdir(tentacleDir)) {
+        if (!preserveDirs.has(entry)) {
+          await fs.rm(path.join(tentacleDir, entry), { recursive: true, force: true }).catch(() => {})
+        }
+      }
+    }
     await fs.cp(skill.path, tentacleDir, { recursive: true })
 
     // Step 4: Inject user config (.env + prompt placeholders)
@@ -229,6 +251,7 @@ export class SkillSpawner {
           fields_count: Object.keys(params.config ?? {}).length,
         })
       } catch (err: any) {
+        await this.tentacleManager.kill(params.tentacleId, "deploy_failed").catch(() => {})
         await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
         brainLogger.error("skill_tentacle_deploy_failed", {
           tentacle_id: params.tentacleId,
@@ -286,6 +309,7 @@ export class SkillSpawner {
         systemLogger.info("setup_command_ok", { tentacleId: params.tentacleId, command: cmd })
       } catch (err: any) {
         // Abort immediately with clear error
+        await this.tentacleManager.kill(params.tentacleId, "deploy_failed").catch(() => {})
         await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
         const hints: string[] = []
         if (cmd.includes("python3")) hints.push("建议：请确认 python3 已安装（运行 which python3 检查）")
@@ -308,8 +332,17 @@ export class SkillSpawner {
       }
     }
 
-    // Step 6: Write tentacle.json
-    const trigger = skill.skillTentacleConfig?.defaultTrigger ?? "30m"
+    // Step 6: Write tentacle.json — sync interval from config if provided
+    const intervalSecsRaw = params.config?.HN_INTERVAL_SECONDS ?? params.config?.INTERVAL_SECONDS
+    let trigger = skill.skillTentacleConfig?.defaultTrigger ?? "30m"
+    if (intervalSecsRaw) {
+      const secs = parseInt(String(intervalSecsRaw), 10)
+      if (!isNaN(secs) && secs > 0) {
+        if (secs < 60) trigger = `${secs}s`
+        else if (secs < 3600) trigger = `${Math.round(secs / 60)}m`
+        else trigger = `${Math.round(secs / 3600)}h`
+      }
+    }
     await this.writeTentacleJson(params.tentacleId, tentacleDir, skill.skillTentacleConfig, {
       purpose: params.purpose,
       trigger,
@@ -399,7 +432,8 @@ export class SkillSpawner {
       return { success: false, errors: prerequisiteErrors }
     }
 
-    // Step 2: Copy to runtime directory
+    // Step 2: Kill existing tentacle if running, then copy source
+    await this.ensureTentacleStopped(params.tentacleId)
     await fs.cp(skill.path, tentacleDir, { recursive: true })
 
     // Step 3: Inject user config
@@ -408,6 +442,7 @@ export class SkillSpawner {
       try {
         placeholderMapping = await this.injectUserConfig(tentacleDir, params.config ?? {}, skill.skillTentacleConfig)
       } catch (err: any) {
+        await this.tentacleManager.kill(params.tentacleId, "deploy_failed").catch(() => {})
         await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
         return { success: false, errors: [err.message] }
       }
@@ -421,6 +456,7 @@ export class SkillSpawner {
     try {
       deployArtifact = await this.codeAgent.deployExisting(tentacleDir, { brief: params.brief })
     } catch (err: any) {
+      await this.tentacleManager.kill(params.tentacleId, "deploy_failed").catch(() => {})
       await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
       return { success: false, errors: [`定制化部署失败：${err.message}`] }
     }
@@ -452,6 +488,7 @@ export class SkillSpawner {
           systemLogger.info("critical_file_restored", { tentacleId: params.tentacleId, file: relFile })
         } catch (restoreErr: any) {
           // If we can't restore a critical file, abort the deployment
+          await this.tentacleManager.kill(params.tentacleId, "deploy_failed").catch(() => {})
           await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
           return {
             success: false,
@@ -470,11 +507,20 @@ export class SkillSpawner {
       })
     }
 
-    // Step 6: Write tentacle.json
-    const trigger = skill.skillTentacleConfig?.defaultTrigger ?? "30m"
+    // Step 6: Write tentacle.json — sync interval from config if provided
+    const intervalSecsCustomize = params.config?.HN_INTERVAL_SECONDS ?? params.config?.INTERVAL_SECONDS
+    let triggerCustomize = skill.skillTentacleConfig?.defaultTrigger ?? "30m"
+    if (intervalSecsCustomize) {
+      const secs = parseInt(String(intervalSecsCustomize), 10)
+      if (!isNaN(secs) && secs > 0) {
+        if (secs < 60) triggerCustomize = `${secs}s`
+        else if (secs < 3600) triggerCustomize = `${Math.round(secs / 60)}m`
+        else triggerCustomize = `${Math.round(secs / 3600)}h`
+      }
+    }
     await this.writeTentacleJson(params.tentacleId, tentacleDir, skill.skillTentacleConfig, {
       purpose: params.purpose,
-      trigger,
+      trigger: triggerCustomize,
       skillName: skill.name,
       source: `skill_tentacle:${skill.name}:customized`,
       placeholderMapping,
@@ -492,7 +538,7 @@ export class SkillSpawner {
       skillName: skill.name,
       runtime: skill.skillTentacleConfig?.runtime,
       directory: tentacleDir,
-      trigger,
+      trigger: triggerCustomize,
       description: skill.description,
       deployed: true,
       spawned: true,
@@ -905,9 +951,11 @@ export class SkillSpawner {
     }
 
     // Inject customizable env_var fields
+    // Support both field name and env_var name as config keys
+    // (Brain may send either "use_llm_filter" or "USE_LLM_FILTER")
     for (const custom of tentacleConfig.customizable ?? []) {
       if (custom.envVar) {
-        const val = userConfig[custom.field] ?? custom.default
+        const val = userConfig[custom.field] ?? userConfig[custom.envVar] ?? custom.default
         if (val !== undefined) {
           setEnv(custom.envVar, String(val))
         }

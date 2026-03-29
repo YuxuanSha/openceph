@@ -16,8 +16,13 @@ function ok(text: string) {
 }
 
 function normalizeScheduleAction(action: string): string {
-  if (action === "update_self_schedule_config") return "set_self_schedule"
-  return action
+  const aliases: Record<string, string> = {
+    "update_self_schedule_config": "set_self_schedule",
+    "set_self_schedule_interval": "set_self_schedule",
+    "set_interval": "set_self_schedule",
+    "update_interval": "set_self_schedule",
+  }
+  return aliases[action] ?? action
 }
 
 function normalizeDurationInput(input: string): string {
@@ -160,29 +165,28 @@ export function createTentacleTools(
     label: "List Tentacles",
     description: "列出当前所有触手的状态。部署后确认触手是否成功上线时用这个。",
     parameters: Type.Object({
-      status_filter: Type.Optional(Type.Union([
-        Type.Literal("all"),
-        Type.Literal("active"),
-        Type.Literal("running"),
-        Type.Literal("registered"),
-        Type.Literal("deploying"),
-        Type.Literal("pending"),
-        Type.Literal("paused"),
-        Type.Literal("weakened"),
-        Type.Literal("killed"),
-        Type.Literal("crashed"),
-      ], {
-        description: "按状态过滤。合法值：all / active / running / registered / deploying / pending / paused / weakened / killed / crashed。不确定就用 all。",
+      status_filter: Type.Optional(Type.String({
+        description: "按状态过滤。单个值或逗号分隔多个值。合法值：all / active / running / registered / deploying / pending / paused / weakened / killed / crashed。不确定就用 all。",
       })),
     }),
     async execute(_id, params: any) {
-      const filter = params.status_filter ?? "all"
+      const VALID_STATUSES = new Set(["all", "active", "running", "registered", "deploying", "pending", "paused", "weakened", "killed", "crashed"])
+      const ACTIVE_STATUSES = ["running", "registered", "paused", "weakened"]
+      const raw = (params.status_filter ?? "all") as string
+      const filters = raw.split(",").map((s: string) => s.trim()).filter(Boolean)
+      const invalid = filters.filter((f: string) => !VALID_STATUSES.has(f))
+      if (invalid.length > 0) {
+        return ok(`Error: invalid status_filter values: ${invalid.join(", ")}. Valid: all, active, running, registered, deploying, pending, paused, weakened, killed, crashed`)
+      }
       const items = manager.listAll()
-      const filtered = filter === "all"
+      const useAll = filters.includes("all")
+      const useActive = filters.includes("active")
+      const filtered = useAll
         ? items
-        : filter === "active"
-          ? items.filter((item) => ["running", "registered", "paused", "weakened"].includes(item.status))
-          : items.filter((item) => item.status === filter)
+        : items.filter((item) =>
+            filters.includes(item.status)
+            || (useActive && ACTIVE_STATUSES.includes(item.status))
+          )
       if (filtered.length === 0) return ok("No tentacles found.")
       const rendered = await Promise.all(filtered.map(async (item) => {
         const artifacts = await resolveTentacleArtifacts(manager, logDir, item.tentacleId)

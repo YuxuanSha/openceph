@@ -565,30 +565,40 @@ export class TentacleManager {
       // Per protocol: send reply first, then close if conversation is done
       await this.sendConsultationReply(tentacleId, replyPayload)
 
-      // Send consultation_close after reply when continue=false (per protocol §4.2)
       if (replyPayload.continue === false) {
+        // Conversation done: send close, archive, and update counters
         const pushedCount = replyPayload.actions_taken?.filter(a => a.action === "pushed_to_user").length ?? replyPayload.queuedPushCount ?? 0
         const discardedCount = (payload.items?.length ?? payload.item_count ?? 0) - pushedCount
         await this.sendConsultationClose(tentacleId, {
           consultation_id: replyPayload.consultation_id ?? replyPayload.session_id ?? payload.request_id,
+          client_request_id: replyPayload.client_request_id ?? payload.request_id,
           summary: replyPayload.notes ?? "",
           pushed_count: pushedCount,
           discarded_count: Math.max(0, discardedCount),
           feedback: undefined,
         })
-      }
 
-      await this.archiveConsultation(tentacleId, payload, replyPayload)
-      this.incrementReportCounters(tentacleId)
-      await this.registry.updateStatus(tentacleId, this.statusMap.get(tentacleId)?.status ?? "running", {
-        lastReport: new Date().toISOString(),
-      })
-      brainLogger.info("tentacle_consultation_replied", {
-        tentacle_id: tentacleId,
-        request_id: payload.request_id,
-        mode: payload.mode,
-        decision: replyPayload.decision ?? "unknown",
-      })
+        await this.archiveConsultation(tentacleId, payload, replyPayload)
+        this.incrementReportCounters(tentacleId)
+        await this.registry.updateStatus(tentacleId, this.statusMap.get(tentacleId)?.status ?? "running", {
+          lastReport: new Date().toISOString(),
+        })
+        brainLogger.info("tentacle_consultation_closed", {
+          tentacle_id: tentacleId,
+          request_id: payload.request_id,
+          mode: payload.mode,
+          decision: replyPayload.decision ?? "unknown",
+          pushed_count: pushedCount,
+        })
+      } else {
+        // Multi-turn: Brain wants to continue the conversation.
+        // Do NOT archive — wait for tentacle's follow-up via consultation_message.
+        brainLogger.info("tentacle_consultation_continuing", {
+          tentacle_id: tentacleId,
+          consultation_id: replyPayload.consultation_id,
+          turn: 1,
+        })
+      }
       return
     }
 

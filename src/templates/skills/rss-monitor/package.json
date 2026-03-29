@@ -1,7 +1,0 @@
-{
-  "name": "@openceph-skills/rss-monitor",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Community RSS monitoring skill template for OpenCeph",
-  "type": "module"
-}

@@ -116,13 +116,16 @@ class IpcClient:
         item_count: int = 0,
         urgency: str = "normal",
         context: Optional[dict] = None,
-    ) -> None:
+    ) -> str:
         """
         Send consultation_request to Brain.
         Per spec §3.2: mode, summary, item_count, initial_message are required.
         Brain assigns the consultation_id and returns it in consultation_reply.
+        Returns: request_id (client-generated) for tracking this consultation.
         """
+        request_id = str(uuid.uuid4())
         payload: dict[str, Any] = {
+            "request_id": request_id,
             "mode": mode,
             "summary": summary,
             "initial_message": initial_message,
@@ -131,6 +134,7 @@ class IpcClient:
             "context": context or {},
         }
         self._send(_make_message("consultation_request", self._tentacle_id, payload))
+        return request_id
 
     def consultation_message(self, consultation_id: str, message: str) -> None:
         """Send a follow-up message within an active consultation."""
@@ -190,7 +194,7 @@ class IpcClient:
     def on_consultation_reply(self, handler: Callable) -> Callable:
         """Decorator: register handler for Brain consultation replies.
 
-        Handler signature: (consultation_id, message, actions_taken, should_continue) -> None
+        Handler signature: (consultation_id, message, actions_taken, should_continue, client_request_id) -> None
         """
         self._register_handler("consultation_reply", handler)
         return handler
@@ -198,7 +202,7 @@ class IpcClient:
     def on_consultation_close(self, handler: Callable) -> Callable:
         """Decorator: register handler for Brain consultation close.
 
-        Handler signature: (consultation_id, summary, pushed_count, discarded_count, feedback) -> None
+        Handler signature: (consultation_id, summary, pushed_count, discarded_count, feedback, client_request_id) -> None
         """
         self._register_handler("consultation_close", handler)
         return handler
@@ -261,6 +265,7 @@ class IpcClient:
                                 payload.get("message", ""),
                                 payload.get("actions_taken", []),
                                 payload.get("continue", False),
+                                payload.get("client_request_id", ""),
                             )
                         except Exception:
                             pass
@@ -274,6 +279,7 @@ class IpcClient:
                                 payload.get("pushed_count", 0),
                                 payload.get("discarded_count", 0),
                                 payload.get("feedback"),
+                                payload.get("client_request_id", ""),
                             )
                         except Exception:
                             pass

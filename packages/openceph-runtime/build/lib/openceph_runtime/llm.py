@@ -72,11 +72,26 @@ class LlmClient:
         gateway_token: Optional[str] = None,
         tentacle_id: Optional[str] = None,
         timeout: int = 120,
+        session_log_dir: Optional[str] = None,
     ):
         self.gateway_url = gateway_url or os.environ.get("OPENCEPH_LLM_GATEWAY_URL", "http://127.0.0.1:18792")
+        # Normalize: strip trailing /v1 so we can always append /v1/chat/completions
+        self.gateway_url = self.gateway_url.rstrip("/")
+        if self.gateway_url.endswith("/v1"):
+            self.gateway_url = self.gateway_url[:-3]
         self.gateway_token = gateway_token or os.environ.get("OPENCEPH_LLM_GATEWAY_TOKEN", "")
         self.tentacle_id = tentacle_id or os.environ.get("OPENCEPH_TENTACLE_ID", "unknown")
+        self.model = os.environ.get("OPENCEPH_LLM_MODEL", "default")
         self.timeout = timeout
+        # Session logging directory
+        self._session_log_dir = session_log_dir or os.environ.get("OPENCEPH_TENTACLE_DIR", "")
+        self._session_dir: Optional[str] = None
+        if self._session_log_dir:
+            import pathlib
+            self._session_dir = str(pathlib.Path(self._session_log_dir) / "sessions")
+            pathlib.Path(self._session_dir).mkdir(parents=True, exist_ok=True)
+        self._current_session_file: Optional[str] = None
+        self._last_msg_id: Optional[str] = None
 
     def chat(
         self,
@@ -101,9 +116,10 @@ class LlmClient:
         Returns:
             LlmResponse with parsed content, tool_calls, and usage.
         """
+        resolved_model = self.model if model == "default" else model
         body: dict[str, Any] = {
             "messages": messages,
-            "model": model,
+            "model": resolved_model,
         }
         if tools:
             body["tools"] = tools
@@ -127,7 +143,86 @@ class LlmClient:
             timeout=self.timeout,
         )
         resp.raise_for_status()
-        return LlmResponse(resp.json())
+        response = LlmResponse(resp.json())
+
+        # Session logging (llm-log-example.md format)
+        self._log_session(messages, resolved_model, response)
+
+        return response
+
+    def start_session(self, session_id: Optional[str] = None) -> str:
+        """Start a new session log file. Returns session_id."""
+        import uuid, datetime
+        sid = session_id or str(uuid.uuid4())
+        if self._session_dir:
+            self._current_session_file = os.path.join(self._session_dir, f"{sid}.jsonl")
+            self._last_msg_id = None
+            self._append_log({"type": "session", "version": 3, "id": sid,
+                              "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+            self._append_log({"type": "model_change", "id": self._make_id(),
+                              "parentId": None, "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                              "provider": os.environ.get("OPENCEPH_LLM_PROVIDER", "unknown"),
+                              "modelId": self.model})
+        return sid
+
+    def _log_session(self, messages: list, model: str, response: "LlmResponse"):
+        """Log a chat() call in llm-log-example.md format."""
+        if not self._session_dir:
+            return
+        try:
+            import datetime, uuid
+            # Auto-start session if not started
+            if not self._current_session_file:
+                self.start_session()
+
+            ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            # Log system prompt (only on first call or if changed)
+            sys_msg = next((m for m in messages if m.get("role") == "system"), None)
+            if sys_msg:
+                sp_id = self._make_id()
+                self._append_log({"type": "system_prompt", "id": sp_id, "parentId": self._last_msg_id,
+                                  "timestamp": ts, "content": sys_msg.get("content", "")})
+                self._last_msg_id = sp_id
+
+            # Log each user message
+            for m in messages:
+                if m.get("role") == "user":
+                    msg_id = self._make_id()
+                    self._append_log({"type": "message", "id": msg_id, "parentId": self._last_msg_id,
+                                      "timestamp": ts, "message": {"role": "user",
+                                      "content": [{"type": "text", "text": m.get("content", "")}]}})
+                    self._last_msg_id = msg_id
+
+            # Log assistant response
+            ast_id = self._make_id()
+            content = []
+            if response.content:
+                content.append({"type": "text", "text": response.content})
+            if response.tool_calls:
+                for tc in response.tool_calls:
+                    content.append({"type": "toolCall", "id": tc.id, "name": tc.name,
+                                    "arguments": tc.arguments})
+            self._append_log({"type": "message", "id": ast_id, "parentId": self._last_msg_id,
+                              "timestamp": ts, "message": {"role": "assistant", "content": content,
+                              "model": model, "usage": response.usage,
+                              "stopReason": response.finish_reason}})
+            self._last_msg_id = ast_id
+        except Exception:
+            pass
+
+    def _append_log(self, record: dict):
+        if self._current_session_file:
+            try:
+                with open(self._current_session_file, "a", encoding="utf-8") as f:
+                    f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+
+    @staticmethod
+    def _make_id() -> str:
+        import uuid
+        return uuid.uuid4().hex[:8]
 
     def health(self) -> dict:
         """Check LLM Gateway health."""

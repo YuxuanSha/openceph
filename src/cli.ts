@@ -161,9 +161,15 @@ program
     if (existsSync(actualWorkspaceSrc)) {
       const templateFiles = await fs.readdir(actualWorkspaceSrc)
       for (const file of templateFiles) {
+        const src = path.join(actualWorkspaceSrc, file)
         const dest = path.join(workspaceDest, file)
         if (!existsSync(dest)) {
-          copyFileSync(path.join(actualWorkspaceSrc, file), dest)
+          const stat = await fs.stat(src)
+          if (stat.isDirectory()) {
+            await fs.cp(src, dest, { recursive: true })
+          } else {
+            copyFileSync(src, dest)
+          }
         }
       }
 
@@ -175,7 +181,7 @@ program
       if (currentVersion !== TEMPLATE_VERSION) {
         // Managed files: system-owned prompt templates that should be updated on upgrade
         // NOT migrated: USER.md, MEMORY.md (user data), TOOLS.md (auto-generated), TENTACLES.md (live registry)
-        const managedFiles = ["AGENTS.md", "SOUL.md", "CONSULTATION.md", "HEARTBEAT.md", "IDENTITY.md", "BOOTSTRAP.md"]
+        const managedFiles = ["HEARTBEAT.md", "BOOTSTRAP.md"]
         for (const file of managedFiles) {
           const src = path.join(actualWorkspaceSrc, file)
           const dest = path.join(workspaceDest, file)

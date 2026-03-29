@@ -18,6 +18,7 @@ import { HeartbeatRunner } from "./heartbeat/heartbeat-runner.js"
 import { HeartbeatScheduler } from "./heartbeat/scheduler.js"
 import { MemoryManager } from "./memory/memory-manager.js"
 import { SessionStoreManager } from "./session/session-store.js"
+import { upgradeBuiltinTentacles } from "./cli.js"
 import * as fs from "fs/promises"
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from "fs"
 import * as path from "path"
@@ -90,6 +91,15 @@ export async function startOpenCeph(): Promise<void> {
       }
     },
   })
+  // Auto-upgrade builtin skills on every start (ensures latest code is in skills/)
+  try {
+    const skillsDir = path.join(os.homedir(), ".openceph", "skills")
+    await upgradeBuiltinTentacles(skillsDir)
+    systemLogger.info("builtin_skills_synced")
+  } catch (err) {
+    systemLogger.warn("builtin_skills_sync_failed", { error: err instanceof Error ? err.message : String(err) })
+  }
+
   await brain.initialize()
 
   // Register MCP tools to brain's tool registry

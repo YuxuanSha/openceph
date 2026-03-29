@@ -1,4 +1,4 @@
-import { loadWorkspaceFiles } from "./context-assembler.js"
+import { loadWorkspaceFiles, loadIdentityFiles } from "./context-assembler.js"
 import type { ToolRegistry } from "../tools/index.js"
 
 export interface SystemPromptOptions {
@@ -99,20 +99,27 @@ export async function assembleSystemPrompt(
   // Project Context Files
   const { bootstrapMaxChars, bootstrapTotalMaxChars } = getCharLimits()
 
-  const fileList: string[] = ["SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md", "TOOLS.md"]
+  // Identity files — loaded from identities/brain-user/ with fallback to root
+  const identityFiles = ["SOUL.md", "AGENTS.md", "TOOLS.md", "IDENTITY.md"]
+  const identityWs = await loadIdentityFiles(workspaceDir, "brain-user", identityFiles, bootstrapMaxChars, bootstrapTotalMaxChars)
 
+  for (const f of identityWs) {
+    sections.push(`# [Project Context] ${f.name}\n${f.content}`)
+  }
+
+  // Shared files — always loaded from workspace root
+  const sharedFiles: string[] = ["USER.md"]
   if (options.mode === "full") {
-    fileList.push("HEARTBEAT.md", "TENTACLES.md")
-    if (options.isDm) fileList.push("MEMORY.md")
+    sharedFiles.push("HEARTBEAT.md", "TENTACLES.md")
+    if (options.isDm) sharedFiles.push("MEMORY.md")
   }
-
   if (options.isNewWorkspace) {
-    fileList.push("BOOTSTRAP.md")
+    sharedFiles.push("BOOTSTRAP.md")
   }
 
-  const wsFiles = await loadWorkspaceFiles(workspaceDir, fileList, bootstrapMaxChars, bootstrapTotalMaxChars)
+  const sharedWs = await loadWorkspaceFiles(workspaceDir, sharedFiles, bootstrapMaxChars, bootstrapTotalMaxChars)
 
-  for (const f of wsFiles) {
+  for (const f of sharedWs) {
     sections.push(`# [Project Context] ${f.name}\n${f.content}`)
   }
 

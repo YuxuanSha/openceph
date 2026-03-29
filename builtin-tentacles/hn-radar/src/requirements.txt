@@ -1,3 +1,2 @@
-# Core dependencies
-openai>=1.0.0
+openceph-runtime>=1.0.0
 requests>=2.28.0

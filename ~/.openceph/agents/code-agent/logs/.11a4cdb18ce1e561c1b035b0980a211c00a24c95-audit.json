@@ -9,6 +9,16 @@
             "date": 1774541196808,
             "name": "~/.openceph/agents/code-agent/logs/events-2026-03-27.log",
             "hash": "76aae142fc7eb7e9b87ebc7b66d79b327690458c765c1d01bc381a0622d3fd62"
+        },
+        {
+            "date": 1774666361256,
+            "name": "~/.openceph/agents/code-agent/logs/events-2026-03-28.log",
+            "hash": "21a8685f7d20953de7a8676790b086d49dc40611fe5c228bdcbd8456293dee8d"
+        },
+        {
+            "date": 1774752107834,
+            "name": "~/.openceph/agents/code-agent/logs/events-2026-03-29.log",
+            "hash": "5c3b9138e2a9d21a1ed4f3ac11eb6776c1650fa09760a4ab5f817c1d5d2c16fa"
         }
     ],
     "hashType": "sha256"

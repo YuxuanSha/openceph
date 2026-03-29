@@ -102,10 +102,11 @@ config 的 key 就是 SKILL.md 里 customizable 字段的 env_var 名称。
 
 比如 hn-radar 的 customizable 有：
   HN_TOPICS（默认 “AI,LLM,agent,startup”）
-  HN_MIN_SCORE（默认 “50”）
-  USE_LLM_FILTER（默认 “false”）
+  HN_MIN_SCORE（默认 “0”，即不做分数过滤）
+  USE_LLM_FILTER（默认 “true”）
 
 用户说”开启 LLM 过滤，关注 AI Agent” → config: { “USE_LLM_FILTER”: “true”, “HN_TOPICS”: “AI Agent,autonomous agent” }
+用户说”不限主题”/”全部”/”所有最新的” → 不传 HN_TOPICS（使用默认值）。不要传 `*`，这不是合法值。
 
 用户没提到的字段不用填，用默认值就好。
 
@@ -178,6 +179,21 @@ spawn_from_skill 返回 success: false 时，errors 数组里有具体原因。
 - 不要猜工具参数胡乱尝试。
 - 不要声称”已修复”——除非你执行了修复操作并且 tool_result 确认成功。
 - 不要把本该你做的事情变成命令让用户去终端里执行。
+
+### 触手运行时崩溃了怎么办
+
+**这和”部署失败”是完全不同的场景。** 部署失败时用户刚要求了部署，你帮他修是顺理成章的。但运行时崩溃时用户可能完全不知道发生了什么。
+
+处理流程：
+1. 用 inspect_tentacle_log 查看崩溃原因
+2. **用 send_to_user 通知用户**：”你的 {触手名} 崩溃了，原因是 {一句话原因}。需要我帮你修复吗？”
+3. 等用户回复后再行动
+
+**绝对禁止：**
+- 触手崩溃后未经用户确认就部署新触手（如换 tentacle_id 创建 _v2）
+- 触手崩溃后静默修复，不告诉用户发生过什么
+
+即使你能诊断出问题并修复，也必须先通知用户。用户有权知道自己的系统发生了什么。
 
 ### 部署成功后
 

@@ -23,6 +23,7 @@ import type {
 import { createIpcMessage } from "./contract.js"
 import type { TentacleManager } from "./manager.js"
 import type { ConsultationSessionStore, ConsultationSessionRecord } from "./consultation-session-store.js"
+import { loadIdentityFiles } from "../brain/context-assembler.js"
 import type { SessionStoreManager } from "../session/session-store.js"
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -41,6 +42,7 @@ interface ActiveConsultation {
   consultationId: string
   tentacleId: string
   sessionId: string
+  clientRequestId: string  // original request_id from the tentacle's consultation_request
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>
   turn: number
   createdAt: string
@@ -60,11 +62,19 @@ export interface ConsultationSessionManagerOptions {
     consultationId: string,
     systemPrompt: string,
     messages: Array<{ role: string; content: string }>,
+    tentacleId: string,
   ) => Promise<{
     content: string
     toolCalls?: Array<{ name: string; message?: string }>
     pushedItems?: Array<{ message: string; pushId?: string }>
   }>
+  onConsultationClosed?: (tentacleId: string, consultation: {
+    consultationId: string
+    turns: number
+    pushedCount: number
+    discardedCount: number
+    summary: string
+  }) => Promise<void>
 }
 
 // ─── Manager ────────────────────────────────────────────────────
@@ -106,6 +116,7 @@ export class ConsultationSessionManager {
       consultationId,
       tentacleId,
       sessionId,
+      clientRequestId: payload.request_id,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: initialMessage ?? payload.summary ?? "" },
@@ -132,13 +143,9 @@ export class ConsultationSessionManager {
       updatedAt: consultation.createdAt,
     } as ConsultationSessionRecord)
 
-    // Log to main session for visibility
-    await this.logToMainSession(
-      tentacleId,
-      consultationId,
-      `[触手汇报] ${payload.summary ?? ""}`,
-      "consultation_request",
-    )
+    // NOTE: Do NOT log to main session here — consultation content stays in its
+    // own isolated session. Only send_to_user pushes get dual-written to main session.
+    // This prevents context pollution and premature compaction.
 
     brainLogger.info("consultation_session_created", {
       consultation_id: consultationId,
@@ -184,6 +191,17 @@ export class ConsultationSessionManager {
 
     // Send reply back to tentacle
     await this.options.tentacleManager.sendConsultationReply(tentacleId, reply)
+
+    // If Brain says conversation is done, close the session
+    if (reply.continue === false) {
+      const pushedCount = reply.actions_taken?.filter((a: any) => a.action === "pushed_to_user").length ?? reply.queuedPushCount ?? 0
+      await this.closeConsultation(
+        payload.consultation_id,
+        reply.notes ?? reply.message ?? "",
+        pushedCount,
+        Math.max(0, (consultation.turn) - pushedCount),
+      )
+    }
   }
 
   /**
@@ -227,6 +245,7 @@ export class ConsultationSessionManager {
 
     const closePayload: ConsultationClosePayload = {
       consultation_id: consultationId,
+      client_request_id: consultation.clientRequestId,
       summary,
       pushed_count: pushedCount,
       discarded_count: discardedCount,
@@ -254,6 +273,17 @@ export class ConsultationSessionManager {
       pushed_count: pushedCount,
       discarded_count: discardedCount,
     })
+
+    // Notify manager to archive and update counters
+    if (this.options.onConsultationClosed) {
+      await this.options.onConsultationClosed(consultation.tentacleId, {
+        consultationId,
+        turns: consultation.turn,
+        pushedCount,
+        discardedCount,
+        summary,
+      })
+    }
   }
 
   getActiveConsultation(consultationId: string): ActiveConsultation | undefined {
@@ -278,28 +308,28 @@ export class ConsultationSessionManager {
           consultation.consultationId,
           consultation.messages[0].content, // system prompt
           consultation.messages.slice(1),    // user/assistant messages
+          consultation.tentacleId,
         )
         brainContent = result.content
 
-        // Process push actions from Brain's run
-        // Prefer explicit pushedItems (preferred) then fall back to toolCalls.message
+        // Track push actions from Brain's run.
+        // NOTE: send_to_user already executed within runIsolatedTurn — it handled
+        // delivery to user AND dual-write to main session. We only record metadata
+        // here for actionsTaken tracking. Do NOT re-deliver or re-write.
         if (result.pushedItems?.length) {
           for (const item of result.pushedItems) {
-            const pushResult = await this.handleSendToUser(consultation, item.message)
             actionsTaken.push({
               action: "pushed_to_user",
               item_ref: item.message.slice(0, 100),
-              push_id: pushResult?.pushId,
+              push_id: item.pushId,
             })
           }
         } else if (result.toolCalls?.length) {
           for (const tc of result.toolCalls) {
-            if (tc.name === "send_to_user" && tc.message) {
-              const pushResult = await this.handleSendToUser(consultation, tc.message)
+            if (tc.name === "send_to_user") {
               actionsTaken.push({
                 action: "pushed_to_user",
-                item_ref: tc.message.slice(0, 100),
-                push_id: pushResult?.pushId,
+                item_ref: (tc as any).message?.slice(0, 100) ?? "(via tool)",
               })
             }
           }
@@ -322,25 +352,98 @@ export class ConsultationSessionManager {
     consultation.messages.push({ role: "assistant", content: brainContent })
     consultation.actionsTaken = actionsTaken
 
-    // Determine if conversation should continue
-    // Check for explicit end signals in Brain's response
-    if (
-      brainContent.includes("汇报结束") ||
-      brainContent.includes("处理完毕") ||
-      consultation.turn >= ((this.options.config.tentacle as any)?.consultation?.maxTurns ?? (this.options.config.session as any)?.consultation?.maxTurns ?? 20)
-    ) {
+    // Determine if conversation should continue.
+    // Consultation is for quick review+push, not deep research. Max 3 turns.
+    const maxTurns = (this.options.config.tentacle as any)?.consultation?.maxTurns
+      ?? (this.options.config.session as any)?.consultation?.maxTurns
+      ?? 3
+    const hasPushedSomething = actionsTaken.some(a => a.action === "pushed_to_user")
+
+    if (consultation.turn >= maxTurns) {
       shouldContinue = false
+    } else if (hasPushedSomething) {
+      // Brain already pushed content — default to done unless explicit follow-up
+      const hasFollowUpSignal = (
+        brainContent.includes("帮我看看") ||
+        brainContent.includes("帮我查") ||
+        brainContent.includes("补充一下")
+      )
+      shouldContinue = hasFollowUpSignal
+    } else {
+      // No pushes yet — check if Brain is asking tentacle for more info
+      const hasFollowUpSignal = (
+        brainContent.includes("帮我看看") ||
+        brainContent.includes("帮我查") ||
+        brainContent.includes("能不能") ||
+        brainContent.includes("详细说") ||
+        brainContent.includes("补充一下") ||
+        brainContent.includes("具体")
+      )
+      const hasEndSignal = (
+        brainContent.includes("不推") ||
+        brainContent.includes("汇报结束") ||
+        brainContent.includes("处理完毕") ||
+        brainContent.includes("结束对话") ||
+        brainContent.includes("无推送") ||
+        brainContent.includes("continue: false")
+      )
+
+      if (hasEndSignal) {
+        shouldContinue = false
+      } else if (hasFollowUpSignal) {
+        shouldContinue = true
+      } else {
+        // No explicit follow-up, no end signal → default done
+        shouldContinue = false
+      }
+    }
+
+    // If Brain made no tool calls and no explicit decision on turn 1,
+    // give it one more chance with a mandatory nudge.
+    if (!shouldContinue && actionsTaken.length === 0 && consultation.turn === 1) {
+      consultation.messages.push({
+        role: "user",
+        content: "[SYSTEM MANDATORY] 你必须现在做出决策：调用 send_to_user 推送值得推送的内容，或回复「无推送」并说明原因。不接受其他形式的回复。",
+      })
+      shouldContinue = true
+      brainLogger.info("consultation_retry_nudge", {
+        consultation_id: consultation.consultationId,
+        reason: "no_tool_calls_on_turn_1",
+      })
+    }
+
+    // After nudge, if turn 2 still no push and no explicit question → force close
+    if (!shouldContinue && actionsTaken.length === 0 && consultation.turn === 2) {
+      brainLogger.warn("consultation_force_close", {
+        consultation_id: consultation.consultationId,
+        reason: "no_push_after_nudge",
+      })
+      shouldContinue = false
+    }
+
+    // Determine decision: "send" if items were pushed, "defer" if conversation
+    // is still active (Brain might push in a later turn), "discard" only when
+    // conversation ends with no pushes.
+    const hasPushes = actionsTaken.some(a => a.action === "pushed_to_user")
+    let decision: "send" | "discard" | "defer" | "question"
+    if (hasPushes) {
+      decision = "send"
+    } else if (shouldContinue) {
+      decision = "defer"
+    } else {
+      decision = "discard"
     }
 
     const reply: ConsultationReplyPayload = {
       session_id: consultation.sessionId,
       requestId: consultation.consultationId,
       status: shouldContinue ? "active" : "resolved",
-      decision: actionsTaken.length > 0 ? "send" : "discard",
+      decision,
       approvedItemIds: [],
       queuedPushCount: actionsTaken.filter(a => a.action === "pushed_to_user").length,
       notes: brainContent,
       consultation_id: consultation.consultationId,
+      client_request_id: consultation.clientRequestId,
       message: brainContent,
       actions_taken: actionsTaken,
       continue: shouldContinue,
@@ -446,9 +549,17 @@ export class ConsultationSessionManager {
   }
 
   private async buildSystemPrompt(context: ConsultationContext): Promise<string> {
-    const template = await this.loadTemplate()
+    const workspace = this.options.config.agents.defaults.workspace
 
-    return template
+    // Load identity files from brain-consultation scene (with fallback to root)
+    const identityFiles = await loadIdentityFiles(
+      workspace, "brain-consultation",
+      ["SOUL.md", "AGENTS.md", "TOOLS.md", "IDENTITY.md"],
+    )
+
+    // Load the consultation template (CONSULTATION.md) which has placeholders
+    const template = await this.loadTemplate()
+    const filled = template
       .replace("{USER_NAME}", "用户")
       .replace("{TENTACLE_DISPLAY_NAME}", context.tentacleDisplayName)
       .replace("{TENTACLE_EMOJI}", context.tentacleEmoji)
@@ -456,6 +567,15 @@ export class ConsultationSessionManager {
       .replace("{TENTACLE_LAST_ACTIVE}", context.tentacleLastActive)
       .replace("{MEMORY_SUMMARY}", context.memorySummary || "(尚无记忆)")
       .replace("{USER_PREFERENCES}", context.userPreferences || "(尚无偏好设置)")
+
+    // Assemble: consultation template + identity files + reminder
+    const parts = [filled]
+    for (const f of identityFiles) {
+      parts.push(`# [Identity] ${f.name}\n${f.content}`)
+    }
+    const reminder = "# REMINDER: 你必须用 send_to_user 工具推送内容给用户。只写文字分析不算推送——用户看不到你的文字回复。"
+    parts.push(reminder)
+    return parts.join("\n\n---\n\n")
   }
 
   private async loadTemplate(): Promise<string> {
@@ -463,7 +583,7 @@ export class ConsultationSessionManager {
 
     const templatePath = path.join(
       this.options.config.agents.defaults.workspace,
-      "CONSULTATION.md",
+      "identities", "brain-consultation", "CONSULTATION.md",
     )
 
     if (existsSync(templatePath)) {
@@ -502,12 +622,18 @@ const DEFAULT_CONSULTATION_TEMPLATE = `# Consultation Session — 你在与下�
 ## 你的职责
 1. **理解汇报内容**：认真阅读触手的汇报，理解每条信息的价值
 2. **追问细节**：如果信息不够充分，向触手追问（触手有 Agent 能力可以实时查询）
-3. **推送决策**：判断哪些信息值得推送给用户
-   - 重要且紧急 → 立即调用 send_to_user 推送
-   - 重要不紧急 → 放入 morning_digest
-   - 不重要 → 不推送，告知触手
+3. **推送决策**：判断哪些信息值得推送给用户。触手已做过初筛，默认倾向是推送。
+   - 和用户当前工作/兴趣直接相关 → 推送
+   - 高分、多评论、有工程价值 → 推送
+   - 和用户完全无关 → 不推送，告知触手
+   - 不确定 → 追问触手要更多信息后再决定
 4. **推送后反馈**：告诉触手哪些已推送、哪些未推送及原因
 5. **质量反馈**：告诉触手未来筛选标准的调整建议
+
+## 对话轮次
+这是一个多轮对话，上限 20 轮。你回复后，触手会收到消息并可以回复你。
+- 追问了问题 → continue: true，等触手回答
+- 处理完所有内容 → continue: false，对话结束
 
 ## 推送格式
 调用 send_to_user 时，消息应该用你（Ceph）的口吻，不要暴露触手的存在：

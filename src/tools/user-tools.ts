@@ -281,6 +281,8 @@ export function createUserTools(opts: {
       ])),
       priority: Type.Optional(Type.Union([
         Type.Literal("urgent"),
+        Type.Literal("high"),
+        Type.Literal("medium"),
         Type.Literal("normal"),
         Type.Literal("low"),
       ])),

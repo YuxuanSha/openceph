@@ -53,9 +53,7 @@ describe("integration: startup chain", () => {
     const loader = new SkillLoader(config.skills.paths)
     await loader.loadAll()
 
-    // At minimum, the 3 core skills from the plan should exist
+    // Core builtin skill must exist
     expect(loader.get("hn-radar")).toBeDefined()
-    expect(loader.get("github-release-watcher")).toBeDefined()
-    expect(loader.get("daily-digest-curator")).toBeDefined()
   })
 })

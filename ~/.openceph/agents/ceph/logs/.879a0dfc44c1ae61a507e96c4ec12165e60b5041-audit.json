@@ -9,6 +9,16 @@
             "date": 1774541196801,
             "name": "~/.openceph/agents/ceph/logs/events-2026-03-27.log",
             "hash": "5333adb43b13ff471d6f561a0d06316ef0ea47ecf735e116eda55040e56b06c3"
+        },
+        {
+            "date": 1774666361252,
+            "name": "~/.openceph/agents/ceph/logs/events-2026-03-28.log",
+            "hash": "212a2a1cc20eeb7195749256dc5fa6edcc4ed3c92c4a19aa3eb848e3f328d736"
+        },
+        {
+            "date": 1774752107827,
+            "name": "~/.openceph/agents/ceph/logs/events-2026-03-29.log",
+            "hash": "29484409ed813262a1ba460af6fa3a2c6df7dd90c5be52b549e8fc9d2093b1d6"
         }
     ],
     "hashType": "sha256"

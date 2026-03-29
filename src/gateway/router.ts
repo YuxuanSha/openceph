@@ -206,21 +206,59 @@ export class ChannelRouter {
           })
         }
       } catch (err: any) {
+        const isRetryable = /UNABLE_TO_VERIFY|CERT_HAS_EXPIRED|ECONNRESET|ETIMEDOUT|ECONNREFUSED|first certificate/i.test(err.message ?? "")
         gatewayLogger.error("brain_error", {
           channel: msg.channel,
           sender_id: msg.senderId,
           error: err.message,
+          retryable: isRetryable,
         })
         const errMsg = "⚠️ An error occurred while processing your message. Please try again."
-        if (streamHandle) {
-          await streamHandle.finalize(errMsg).catch(() => {})
-        } else {
-          await channel.send(target, {
-            text: errMsg,
-            timing: "immediate",
-            priority: "normal",
-            messageId: crypto.randomUUID(),
-          })
+
+        // Retry delivery for transient errors (TLS, network)
+        let delivered = false
+        if (isRetryable) {
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            const delayMs = Math.pow(2, attempt - 1) * 1000 // 1s, 2s, 4s
+            await new Promise((r) => setTimeout(r, delayMs))
+            try {
+              if (streamHandle) {
+                await streamHandle.finalize(errMsg)
+              } else {
+                await channel.send(target, {
+                  text: errMsg,
+                  timing: "immediate",
+                  priority: "normal",
+                  messageId: crypto.randomUUID(),
+                })
+              }
+              gatewayLogger.info("retry_delivery_success", {
+                channel: msg.channel,
+                attempt,
+              })
+              delivered = true
+              break
+            } catch (retryErr: any) {
+              gatewayLogger.warn("retry_delivery_failed", {
+                channel: msg.channel,
+                attempt,
+                error: retryErr.message,
+              })
+            }
+          }
+        }
+
+        if (!delivered) {
+          if (streamHandle) {
+            await streamHandle.finalize(errMsg).catch(() => {})
+          } else {
+            await channel.send(target, {
+              text: errMsg,
+              timing: "immediate",
+              priority: "normal",
+              messageId: crypto.randomUUID(),
+            }).catch(() => {})
+          }
         }
       } finally {
         await typingHandle?.stop().catch((err: any) => {

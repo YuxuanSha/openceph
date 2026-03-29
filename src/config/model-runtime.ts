@@ -22,8 +22,14 @@ export function buildTentacleModelEnv(config: OpenCephConfig): Record<string, st
   }
 
   if (runtime.api) env.OPENCEPH_LLM_API = runtime.api
-  if (runtime.baseUrl) env.OPENCEPH_LLM_BASE_URL = runtime.baseUrl
-  if (runtime.apiKey) env.OPENCEPH_LLM_API_KEY = runtime.apiKey
+  if (runtime.baseUrl) {
+    env.OPENCEPH_LLM_BASE_URL = runtime.baseUrl
+    env.OPENCEPH_LLM_GATEWAY_URL = runtime.baseUrl  // runtime LlmClient reads this name
+  }
+  if (runtime.apiKey) {
+    env.OPENCEPH_LLM_API_KEY = runtime.apiKey
+    env.OPENCEPH_LLM_GATEWAY_TOKEN = runtime.apiKey  // runtime LlmClient reads this name
+  }
   if (runtime.fallbacks.length > 0) env.OPENCEPH_LLM_FALLBACKS_JSON = JSON.stringify(runtime.fallbacks)
   if (runtime.params && Object.keys(runtime.params).length > 0) {
     env.OPENCEPH_LLM_PARAMS_JSON = JSON.stringify(runtime.params)

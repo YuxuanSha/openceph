@@ -14,6 +14,16 @@
             "date": 1774541196806,
             "name": "~/.openceph/logs/cost-2026-03-27.log",
             "hash": "f85ea999561533459c34d08d183f5016e27f7843c4334dbe82206df657e2d790"
+        },
+        {
+            "date": 1774666361255,
+            "name": "~/.openceph/logs/cost-2026-03-28.log",
+            "hash": "31c64a76190a0de153e44bb22439a41324b7513fe933c05b7ffd523cd36430cc"
+        },
+        {
+            "date": 1774752107833,
+            "name": "~/.openceph/logs/cost-2026-03-29.log",
+            "hash": "53e7f78a98aa18597c9fc22501ce93faac4c971da15772842a1ef2f636db91c4"
         }
     ],
     "hashType": "sha256"

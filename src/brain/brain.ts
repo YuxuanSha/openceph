@@ -176,8 +176,18 @@ export class Brain {
       lastActiveChannel: () => this.lastActiveChannel,
       lastActiveSenderId: () => this.lastActiveSenderId,
       resolveSessionKey: async (sessionFile) => {
-        return await this.sessionStore.resolveSessionKeyByTranscriptPath(sessionFile)
-          ?? await new SessionStoreManager("cron").resolveSessionKeyByTranscriptPath(sessionFile)
+        // Check main (ceph) and cron stores first
+        const fromCeph = await this.sessionStore.resolveSessionKeyByTranscriptPath(sessionFile)
+        if (fromCeph) return fromCeph
+        const fromCron = await new SessionStoreManager("cron").resolveSessionKeyByTranscriptPath(sessionFile)
+        if (fromCron) return fromCron
+        // Check per-tentacle stores: path like .../agents/tentacles/{id}/sessions/{file}
+        const tentacleMatch = sessionFile.match(/agents\/tentacles\/([^/]+)\/sessions\//)
+        if (tentacleMatch) {
+          const tentacleAgentId = `tentacles/${tentacleMatch[1]}`
+          return await new SessionStoreManager(tentacleAgentId).resolveSessionKeyByTranscriptPath(sessionFile)
+        }
+        return undefined
       },
       onConsultationPush: async (payload) => {
         const syntheticItem: ApprovedPushItem = {
@@ -260,12 +270,17 @@ export class Brain {
           return await fs.readFile(userMdPath, "utf-8")
         } catch { return "" }
       },
-      runBrainTurn: async (consultationId, systemPrompt, messages) => {
+      runBrainTurn: async (consultationId, systemPrompt, messages, tentacleId) => {
         const output = await this.runIsolatedTurn({
           sessionKey: `consultation:${consultationId}`,
           mode: "minimal",
-          message: messages.map(m => `[${m.role}]: ${m.content}`).join("\n\n"),
+          message: messages.map(m => {
+            const label = m.role === "user" ? `触手:${tentacleId}` : "brain_response"
+            return `[${label}]: ${m.content}`
+          }).join("\n\n"),
           systemPromptOverride: systemPrompt,
+          agentId: `tentacles/${tentacleId}`,
+          toolAllowList: ["send_to_user", "web_search", "web_fetch"],
         })
         // Extract send_to_user calls from tool calls (args captured via tool_execution_start event)
         const pushedItems: Array<{ message: string; pushId?: string }> = []
@@ -280,6 +295,37 @@ export class Brain {
           toolCalls: output.toolCalls.map(tc => ({ name: tc.name })),
           pushedItems: pushedItems.length > 0 ? pushedItems : undefined,
         }
+      },
+      onConsultationClosed: async (tentacleId, info) => {
+        // Archive consultation data to tentacle's session directory and update counters
+        brainLogger.info("consultation_archived_multi_turn", {
+          tentacle_id: tentacleId,
+          consultation_id: info.consultationId,
+          turns: info.turns,
+          pushed_count: info.pushedCount,
+          discarded_count: info.discardedCount,
+        })
+        // Write a summary archive file to the tentacle's sessions directory
+        const sessionsDir = path.join(os.homedir(), ".openceph", "tentacles", tentacleId, "sessions")
+        await fs.mkdir(sessionsDir, { recursive: true })
+        await fs.writeFile(
+          path.join(sessionsDir, `${info.consultationId}.json`),
+          JSON.stringify({
+            tentacleId,
+            consultationId: info.consultationId,
+            turns: info.turns,
+            pushedCount: info.pushedCount,
+            discardedCount: info.discardedCount,
+            summary: info.summary,
+            archivedAt: new Date().toISOString(),
+          }, null, 2),
+          "utf-8",
+        )
+        // Update consultation store with archive info
+        await this.consultationStore.update(info.consultationId, {
+          status: "closed",
+          turn: info.turns,
+        })
       },
     })
     this.tentacleManager.setConsultationHandler(async ({ tentacleId, payload }) => {
@@ -586,6 +632,8 @@ export class Brain {
     mode?: "full" | "minimal"
     thinking?: string
     systemPromptOverride?: string
+    agentId?: string
+    toolAllowList?: string[]
   }): Promise<BrainOutput> {
     const resolution = resolveRunnableModel({
       piCtx: this.piCtx,
@@ -593,13 +641,22 @@ export class Brain {
       preferredModel: params.model ?? this.config.heartbeat.model,
     })
     const model = resolution.modelId
-    const cronSessionStore = new SessionStoreManager("cron")
+    const cronSessionStore = new SessionStoreManager(params.agentId ?? "cron")
     const sessionEntry = await cronSessionStore.getOrCreate(params.sessionKey, {
       model,
       origin: { channel: "cron", senderId: "cron:system" },
     })
     await cronSessionStore.updateModel(params.sessionKey, model)
-    const customTools = this.toolRegistry.getPiTools()
+    let customTools = this.toolRegistry.getPiTools()
+    if (params.toolAllowList) {
+      const allowed = new Set(params.toolAllowList)
+      customTools = customTools.filter((t: any) => allowed.has(t.name))
+    }
+    brainLogger.info("isolated_turn_tools", {
+      session_key: params.sessionKey,
+      tool_count: customTools.length,
+      tool_names: customTools.map((t: any) => t.name),
+    })
     const systemPrompt = params.systemPromptOverride ?? await this.buildSystemPrompt({
       channel: "cron",
       isDm: true,
@@ -608,13 +665,25 @@ export class Brain {
       thinkingLevel: normalizeThinkingLevel(params.thinking ?? this.currentThinkingLevel),
       reasoningEnabled: this.reasoningEnabled,
     })
+    const transcriptPath = cronSessionStore.getTranscriptPath(sessionEntry.sessionId)
     const session = await createBrainSession(this.piCtx, this.config, {
-      sessionFilePath: cronSessionStore.getTranscriptPath(sessionEntry.sessionId),
+      sessionFilePath: transcriptPath,
       modelId: model,
       systemPrompt,
       customTools,
       thinkingLevel: normalizeThinkingLevel(params.thinking ?? this.currentThinkingLevel),
     })
+
+    // BUG7 fix: write system_prompt to session JSONL for debugging
+    try {
+      const promptRecord = JSON.stringify({
+        type: "system_prompt",
+        timestamp: new Date().toISOString(),
+        content: systemPrompt.slice(0, 50000),
+        sessionKey: params.sessionKey,
+      })
+      await import("fs/promises").then(fsp => fsp.appendFile(transcriptPath, promptRecord + "\n", "utf-8"))
+    } catch { /* non-critical */ }
 
     let replyText = ""
     let errorMessage = ""
