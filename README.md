@@ -9,10 +9,8 @@
 </p>
 
 <p align="center">
+  <a href="#"><img src="https://img.shields.io/badge/Release-v2026.4.1-orange?style=for-the-badge" alt="v2026.4.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Node-%E2%89%A522-brightgreen?style=for-the-badge&logo=node.js" alt="Node ≥22"></a>
-  <a href="#"><img src="https://img.shields.io/badge/TypeScript-5.9-blue?style=for-the-badge&logo=typescript" alt="TypeScript"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Pi_Framework-0.60-purple?style=for-the-badge" alt="Pi Framework"></a>
 </p>
 
 **OpenCeph** is a _proactive AI personal operating system_ that runs on your own devices. Unlike traditional AI assistants that wait for you to ask, OpenCeph **works autonomously** — monitoring, analyzing, and reporting through its tentacle system. It connects to the channels you already use (Telegram, Feishu, WebChat, CLI), remembers everything, and only bothers you when something actually matters.
