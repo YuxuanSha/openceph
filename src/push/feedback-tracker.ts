@@ -155,13 +155,10 @@ export function detectFeedbackSignal(text: string): "positive" | "negative" | nu
   const lower = text.toLowerCase()
 
   const positivePatterns = [
-    "有用", "好的", "收到", "谢谢", "不错", "很好", "挺好",
-    "thanks", "useful", "great", "good", "helpful", "nice",
-    "👍", "🙏", "❤️",
+    "helpful", "useful", "good", "great", "thanks", "thank you", "appreciate", "nice", "👍", "🙏", "❤️",
   ]
   const negativePatterns = [
-    "没用", "不要再发", "停止", "别发了", "太多了", "不需要",
-    "useless", "stop", "don't send", "not useful", "annoying",
+    "not useful", "useless", "stop sending", "stop", "don't send", "too many", "annoying", "unhelpful",
     "👎",
   ]
 

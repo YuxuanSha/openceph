@@ -1,135 +1,135 @@
-# TOOLS.md — 工具使用指南
+# TOOLS.md — Tool Usage Guide
 
-## 记忆工具
-read_memory — 读取 MEMORY.md 的指定 section 或全文
-write_memory — 写入记忆到每日日志 memory/YYYY-MM-DD.md
-update_memory — 更新已有记忆条目
-delete_memory — 删除指定记忆条目
-memory_get — 读取指定 memory 文件
-memory_search — 搜索 MEMORY.md 和 memory/ 日志中的相关记忆
-distill_memory — 将每日日志提炼到 MEMORY.md
+## Memory Tools
+read_memory — Read a specific section or the full text of MEMORY.md
+write_memory — Write a memory entry to the daily log memory/YYYY-MM-DD.md
+update_memory — Update an existing memory entry
+delete_memory — Delete a specific memory entry
+memory_get — Read a specific memory file
+memory_search — Search MEMORY.md and memory/ logs for relevant memories
+distill_memory — Distill daily logs into MEMORY.md
 
-## 消息工具
-send_to_user — 向用户发送主动消息。系统中唯一允许触达用户的出口。
+## Messaging Tools
+send_to_user — Send a proactive message to the user. The only permitted channel for reaching the user in the system.
 
-## 会话工具
-sessions_list — 列出最近活跃的 session
-sessions_history — 查看指定 session 的最近历史消息
+## Session Tools
+sessions_list — List recently active sessions
+sessions_history — View recent message history for a specific session
 
-## Heartbeat 工具
-create_heartbeat_task — 向 HEARTBEAT.md 添加待处理任务
-complete_heartbeat_task — 将 HEARTBEAT.md 中的任务标记为完成
+## Heartbeat Tools
+create_heartbeat_task — Add a pending task to HEARTBEAT.md
+complete_heartbeat_task — Mark a task in HEARTBEAT.md as complete
 
-## 技能工具
-read_skill — 读取 SKILL 定义文件
-skills_list — 列出当前可用的 SKILL
+## Skill Tools
+read_skill — Read a SKILL definition file
+skills_list — List currently available SKILLs
 
-## 触手管理工具
+## Tentacle Management Tools
 
-### spawn_from_skill — 部署触手
-什么时候用：用户要求部署新触手时。
-mode 选择：看 AGENTS.md 中"怎么判断用什么模式"。
-config：key 对应 SKILL.md 中 customizable 的 env_var，不确定就 read_skill 看一眼。
-brief：场景 B/C 才需要填，场景 A 不填。
+### spawn_from_skill — Deploy a tentacle
+When to use: When the user requests deploying a new tentacle.
+mode selection: See "How to determine which mode to use" in AGENTS.md.
+config: Keys correspond to the env_var of customizable fields in SKILL.md. If unsure, use read_skill to check.
+brief: Only needed for scenarios B/C; not needed for scenario A.
 
-### list_tentacles — 查看触手列表
-什么时候用：想知道当前有哪些触手、它们的状态。
-status_filter 合法值：all、active、running、registered、deploying、pending、paused、weakened、killed、crashed
-不存在的值：offline、stopped、dead、error — 不要用这些。
-不确定用什么值就用 all，拿到全部列表自己判断。
+### list_tentacles — View tentacle list
+When to use: When you want to know what tentacles exist and their status.
+status_filter valid values: all, active, running, registered, deploying, pending, paused, weakened, killed, crashed
+Non-existent values: offline, stopped, dead, error — do not use these.
+If unsure which value to use, use all to get the full list and judge for yourself.
 
-### manage_tentacle — 管理触手
-什么时候用：暂停、恢复、停止、立即运行触手时。
+### manage_tentacle — Manage a tentacle
+When to use: When pausing, resuming, stopping, or immediately running a tentacle.
 
-每个 action 的前提条件：
-  pause → 触手必须是 running 状态
-  resume → 触手必须是 paused 状态
-  kill → 触手是 running 或 paused 状态
-  run_now → 触手必须是 running 状态（立即触发一次执行）
-  strengthen → 触手是 running 状态（升级能力，会调用 Claude Code）
-  weaken → 触手是 running 状态（降低触发频率）
+Prerequisites for each action:
+  pause → tentacle must be in running state
+  resume → tentacle must be in paused state
+  kill → tentacle is in running or paused state
+  run_now → tentacle must be in running state (triggers one immediate execution)
+  strengthen → tentacle is in running state (upgrades capabilities, will invoke Claude Code)
+  weaken → tentacle is in running state (reduces trigger frequency)
 
-常见错误：
-  ✗ 对 killed 的触手调 resume → 不行，killed 的触手必须重新 spawn_from_skill
-  ✗ 用 strengthen 来修复出错的触手 → 不对，strengthen 是升级功能用的
-  ✗ 对 crashed 的触手直接 resume → 应该先 inspect_tentacle_log 看原因
+Common mistakes:
+  ✗ Calling resume on a killed tentacle → not possible; killed tentacles must be re-spawned via spawn_from_skill
+  ✗ Using strengthen to fix a broken tentacle → wrong; strengthen is for upgrading functionality
+  ✗ Calling resume directly on a crashed tentacle → should first inspect_tentacle_log to find the cause
 
-### inspect_tentacle_log — 查看触手日志
-什么时候用：触手部署失败、运行异常、想了解触手在做什么时。
-这是排查触手问题的第一选择工具。看日志比猜测有用得多。
+### inspect_tentacle_log — View tentacle logs
+When to use: When a tentacle deployment fails, runs abnormally, or you want to understand what a tentacle is doing.
+This is the first-choice tool for troubleshooting tentacle issues. Reading logs is far more useful than guessing.
 
-### read_skill — 读取 SKILL 信息
-什么时候用：部署前确认 SKILL 是否存在、查看 customizable 字段、了解触手能力。
-每次部署前都应该 read_skill 看一眼，不要凭记忆判断。
+### read_skill — Read SKILL information
+When to use: Before deployment to confirm a SKILL exists, view customizable fields, or understand tentacle capabilities.
+Always read_skill before each deployment — don't rely on memory.
 
-### manage_tentacle_schedule — 管理触手的 cron、heartbeat 和自管频率
+### manage_tentacle_schedule — Manage a tentacle's cron, heartbeat, and self-managed frequency
 
-合法 action 值：
-  set_tentacle_cron — 创建 cron 定时触发（需要 cron_config.expr）
-  remove_tentacle_cron — 删除 cron job（需要 cron_job_id）
-  set_tentacle_heartbeat — 启用心跳（需要 heartbeat_config.every）
-  disable_tentacle_heartbeat — 关闭心跳
-  set_self_schedule — 设置自管调度间隔（需要 self_schedule_config.interval，如 "1m"、"30m"、"2h"）
-  get_schedule — 查看当前调度配置
+Valid action values:
+  set_tentacle_cron — Create a cron-triggered schedule (requires cron_config.expr)
+  remove_tentacle_cron — Delete a cron job (requires cron_job_id)
+  set_tentacle_heartbeat — Enable heartbeat (requires heartbeat_config.every)
+  disable_tentacle_heartbeat — Disable heartbeat
+  set_self_schedule — Set self-managed scheduling interval (requires self_schedule_config.interval, e.g., "1m", "30m", "2h")
+  get_schedule — View current scheduling configuration
 
-常见错误：
-  ✗ set_self_schedule_interval → 正确名称是 set_self_schedule
-  ✗ 不传 self_schedule_config.interval 就调 set_self_schedule → 会报错
+Common mistakes:
+  ✗ set_self_schedule_interval → correct name is set_self_schedule
+  ✗ Calling set_self_schedule without passing self_schedule_config.interval → will error
 
-注意：action 执行后请检查返回结果确认成功，不要假设一定成功。
+Note: After executing an action, check the return result to confirm success. Do not assume it always succeeds.
 
-### review_tentacles — 复盘所有活跃触手，基于健康度评分返回 weaken/kill/merge/strengthen 建议
+### review_tentacles — Review all active tentacles, returning weaken/kill/merge/strengthen recommendations based on health scores
 
-## 搜索工具
+## Search Tools
 
-### web_search — 网页搜索
-什么时候用：
-  - 用户让你搜索某个话题（"帮我搜一下 xxx"）
-  - 触手的工作需要外部数据（新闻、论文、产品信息）
-  - 用户问的问题你不确定答案
+### web_search — Web search
+When to use:
+  - The user asks you to search a topic ("search for xxx")
+  - A tentacle's work requires external data (news, papers, product info)
+  - You're not sure of the answer to the user's question
 
-什么时候绝对不用：
-  - OpenCeph 内部系统问题（部署失败、触手崩溃、IPC 错误、配置问题）
-  - 这些问题互联网上搜不到任何有用信息
-  - 内部问题用 inspect_tentacle_log 或直接读 tool_result 错误信息
+When absolutely not to use:
+  - OpenCeph internal system issues (deployment failures, tentacle crashes, IPC errors, configuration problems)
+  - The internet has no useful information about these issues
+  - For internal issues, use inspect_tentacle_log or read tool_result error messages directly
 
-### web_fetch — 抓取网页
-什么时候用：需要读取某个具体 URL 的内容时。
-不要用来抓取 OpenCeph 内部文件（用 read 工具）。
+### web_fetch — Fetch a webpage
+When to use: When you need to read the content of a specific URL.
+Do not use this to fetch OpenCeph internal files (use the read tool).
 
-## 文件工具
+## File Tools
 
-### read — 读取本地文件
-用于读取本地文件系统上的任何文件。包括：
-  - 自己 workspace 下的文件
-  - 触手目录下的文件（如 ~/.openceph/tentacles/t_xxx/src/requirements.txt）
-  - 触手 workspace 下的文件（如 ~/.openceph/tentacles/t_xxx/workspace/STATUS.md）
-  - 规范文档（~/.openceph/contracts/skill-tentacle-spec/SPEC.md）
+### read — Read a local file
+Used to read any file on the local filesystem. Including:
+  - Files in your own workspace
+  - Files in tentacle directories (e.g., ~/.openceph/tentacles/t_xxx/src/requirements.txt)
+  - Files in tentacle workspaces (e.g., ~/.openceph/tentacles/t_xxx/workspace/STATUS.md)
+  - Spec documents (~/.openceph/contracts/skill-tentacle-spec/SPEC.md)
 
-不要用 memory_get 读触手的文件——memory_get 只读 memory/ 目录下的记忆文件。
-不要用 web_fetch 读本地文件——web_fetch 只能抓取 HTTP URL。
+Do not use memory_get to read tentacle files — memory_get only reads memory files under the memory/ directory.
+Do not use web_fetch to read local files — web_fetch can only fetch HTTP URLs.
 
-### write / edit — 写入/编辑文件
-只写自己 workspace 下的文件。不要写触手目录下的文件（那是触手自己管的）。
+### write / edit — Write/edit files
+Only write files within your own workspace. Do not write files in tentacle directories (those are managed by the tentacles themselves).
 
-## 代码工具
-invoke_code_agent — 生成并落盘新的触手代码（完整 Agent 系统），不会自动宣称已运行；只有 spawned=true 时才表示已启动
+## Code Tools
+invoke_code_agent — Generate and write new tentacle code (complete Agent system) to disk; does not automatically claim it is running. Only when spawned=true does it indicate the tentacle has been started.
 
-## cron
-cron_add — 创建定时任务
-cron_list — 列出所有定时任务
-cron_update — 修改定时任务
-cron_remove — 删除定时任务
-cron_run — 手动触发定时任务
+## Cron
+cron_add — Create a scheduled task
+cron_list — List all scheduled tasks
+cron_update — Modify a scheduled task
+cron_remove — Delete a scheduled task
+cron_run — Manually trigger a scheduled task
 
-## 工具使用原则
-- 能直接回答的不调工具
-- 当前这轮对话的正常回复，直接输出文本；不要调用 send_to_user
-- send_to_user 只用于主动通知、异步提醒、非当前会话的外呼
-- 用户说"搜一下""查一下""找一下""新闻"等需要实时信息时，必须调用 web_search
-- 如果没有实际调用过 web_search，绝不能声称"已经搜过了"
-- 搜索结果直接在回复中总结，不需要再调用 send_to_user
-- web_fetch 不执行 JS，JS 重度页面需注意
-- 调用 invoke_code_agent / spawn_from_skill 后，必须按 tool result 原样区分 generated、deployed、spawned、running，禁止把 deployed 说成已运行
-- 只有 tool result 明确给出 spawned=true 或运行态证据时，才能说"已启动/后台运行"
-- 只能引用 tool result 或状态系统返回的真实日志路径，禁止臆造 logs/ 目录
+## Tool Usage Principles
+- Don't call tools when you can answer directly
+- For normal replies in the current conversation turn, output text directly; do not call send_to_user
+- send_to_user is only for proactive notifications, async reminders, and outbound messages outside the current session
+- When the user says "search for," "look up," "find," "news," or similar requests needing real-time information, you must call web_search
+- If you haven't actually called web_search, never claim "I already searched"
+- Summarize search results directly in your reply; no need to call send_to_user again
+- web_fetch does not execute JS; be aware with JS-heavy pages
+- After calling invoke_code_agent / spawn_from_skill, you must accurately distinguish between generated, deployed, spawned, and running based on the tool result — do not say "deployed" means "running"
+- Only say "started/running in background" when tool result explicitly shows spawned=true or evidence of running state
+- Only reference real log paths returned by tool result or the status system — never fabricate logs/ directory paths

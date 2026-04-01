@@ -55,7 +55,7 @@ export class TentacleDeployer {
       } catch {
         const files = await listFiles(targetDir)
         throw new Error(
-          `部署失败：入口文件 ${entryPath} 不存在于 ${targetDir}。实际文件：${files.join(", ") || "(empty)"}`,
+          `Deployment failed: entry file ${entryPath} does not exist in ${targetDir}. Actual files: ${files.join(", ") || "(empty)"}`,
         )
       }
     }

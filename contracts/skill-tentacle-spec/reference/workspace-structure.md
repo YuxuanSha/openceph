@@ -1,87 +1,87 @@
-# Workspace 目录结构完整规范
+# Workspace Directory Structure Complete Specification
 
-**文件位置：** `contracts/skill-tentacle-spec/reference/workspace-structure.md`  
-**用途：** 触手运行时目录结构的完整定义
+**File location:** `contracts/skill-tentacle-spec/reference/workspace-structure.md`
+**Purpose:** Complete definition of the tentacle runtime directory structure
 
 ---
 
-## 1. 触手根目录
+## 1. Tentacle Root Directory
 
-每个触手部署在 `~/.openceph/tentacles/{tentacle_id}/` 下：
+Each tentacle is deployed under `~/.openceph/tentacles/{tentacle_id}/`:
 
 ```
 ~/.openceph/tentacles/{tentacle_id}/
 │
-├── tentacle.json               # [必须] 触手元数据（运行时状态、配置快照）
-├── .env                        # [必须] 环境变量（部署时自动生成）
+├── tentacle.json               # [Required] Tentacle metadata (runtime state, config snapshot)
+├── .env                        # [Required] Environment variables (auto-generated at deployment)
 │
-├── src/                        # [必须] 工程源代码
-│   ├── main.py                 # 入口文件
-│   ├── requirements.txt        # 依赖
-│   └── ...                     # 其他源文件
+├── src/                        # [Required] Engineering source code
+│   ├── main.py                 # Entry file
+│   ├── requirements.txt        # Dependencies
+│   └── ...                     # Other source files
 │
-├── prompt/                     # [必须] Agent prompt 原始文件
-│   └── SYSTEM.md               # 触手 system prompt（含占位符的原始版）
+├── prompt/                     # [Required] Agent prompt source files
+│   └── SYSTEM.md               # Tentacle system prompt (original version with placeholders)
 │
-├── tools/                      # [如有自建工具] 工具定义
+├── tools/                      # [If custom tools exist] Tool definitions
 │   └── tools.json
 │
-├── workspace/                  # [必须] 触手工作空间（Agent 读写）
-│   ├── SYSTEM.md               # system prompt 填充版（运行时使用此文件）
-│   ├── STATUS.md               # 运行状态（触手自维护）
-│   └── REPORTS.md              # 历史汇报摘要（触手自维护）
+├── workspace/                  # [Required] Tentacle workspace (Agent read/write)
+│   ├── SYSTEM.md               # System prompt with placeholders filled (used at runtime)
+│   ├── STATUS.md               # Runtime status (maintained by tentacle)
+│   └── REPORTS.md              # Historical report summaries (maintained by tentacle)
 │
-├── data/                       # [推荐] 工程层持久化数据
-│   ├── state.db                # SQLite 数据库
-│   ├── cache/                  # 临时缓存
-│   └── raw/                    # 原始抓取数据
+├── data/                       # [Recommended] Engineering layer persistent data
+│   ├── state.db                # SQLite database
+│   ├── cache/                  # Temporary cache
+│   └── raw/                    # Raw fetched data
 │
-├── reports/                    # [推荐] 汇报内容管理
-│   ├── pending/                # 积攒中、尚未提交的发现
+├── reports/                    # [Recommended] Report content management
+│   ├── pending/                # Accumulated items not yet submitted
 │   │   └── batch-001.json
-│   └── submitted/              # 已提交归档
+│   └── submitted/              # Submitted and archived
 │       └── 2026-03-26-001.json
 │
-├── logs/                       # [必须] 日志（由 TentacleLogger 自动写入）
-│   ├── daemon.log              # 工程层日志
-│   ├── agent.log               # Agent 层日志
-│   └── consultation.log        # Consultation 日志
+├── logs/                       # [Required] Logs (automatically written by TentacleLogger)
+│   ├── daemon.log              # Engineering layer logs
+│   ├── agent.log               # Agent layer logs
+│   └── consultation.log        # Consultation logs
 │
-├── venv/                       # [Python] 虚拟环境
-├── node_modules/               # [TypeScript] 依赖
-└── SKILL.md                    # [推荐] 蓝图元数据副本
+├── venv/                       # [Python] Virtual environment
+├── node_modules/               # [TypeScript] Dependencies
+└── SKILL.md                    # [Recommended] Copy of blueprint metadata
 ```
 
 ---
 
-## 2. 各目录用途与权限
+## 2. Directory Purposes and Permissions
 
-| 目录 | 用途 | 触手可读 | 触手可写 | Brain 可读 |
-|------|------|---------|---------|-----------|
-| `src/` | 源代码 | ✅ | ❌（部署后不改） | ✅ |
-| `prompt/` | prompt 原始文件 | ✅ | ❌ | ✅ |
-| `workspace/` | Agent 工作空间 | ✅ | ✅ | ✅ |
-| `data/` | 工程层数据 | ✅ | ✅ | ✅ |
-| `reports/` | 汇报内容 | ✅ | ✅ | ✅ |
-| `logs/` | 日志 | ✅ | ✅ | ✅ |
-| `tools/` | 工具定义 | ✅ | ❌ | ✅ |
+| Directory | Purpose | Tentacle Readable | Tentacle Writable | Brain Readable |
+|-----------|---------|-------------------|-------------------|----------------|
+| `src/` | Source code | Yes | No (immutable after deployment) | Yes |
+| `prompt/` | Prompt source files | Yes | No | Yes |
+| `workspace/` | Agent workspace | Yes | Yes | Yes |
+| `data/` | Engineering layer data | Yes | Yes | Yes |
+| `reports/` | Report content | Yes | Yes | Yes |
+| `logs/` | Logs | Yes | Yes | Yes |
+| `tools/` | Tool definitions | Yes | No | Yes |
 
-**触手不可访问的目录：**
-- `~/.openceph/workspace/`（Brain workspace）
+**Directories not accessible to the tentacle:**
+- `~/.openceph/workspace/` (Brain workspace)
 - `~/.openceph/credentials/`
-- `~/.openceph/tentacles/{其他触手}/`
+- `~/.openceph/tentacles/{other_tentacles}/`
 - `~/.openceph/openceph.json`
 
 ---
 
-## 3. tentacle.json 完整字段
+## 3. tentacle.json Complete Fields
 
 ```json
 {
   "id": "t_arxiv_scout",
   "displayName": "arXiv Paper Scout",
   "emoji": "🎓",
-  "purpose": "监控 arXiv 最新论文，筛选值得阅读的研究",
+  "purpose": "Monitor latest arXiv papers and filter research worth reading",
   "sourceSkill": "arxiv-paper-scout",
   "sourceSkillVersion": "1.0.0",
   "runtime": "python",
@@ -122,62 +122,62 @@
 
 ---
 
-## 4. workspace/STATUS.md 格式
+## 4. workspace/STATUS.md Format
 
-触手每次 daemon 循环结束后必须更新此文件：
+The tentacle must update this file after each daemon cycle:
 
 ```markdown
-# {触手显示名} — 运行状态
+# {Tentacle Display Name} — Runtime Status
 
-## 当前状态
-- **运行状态：** 正常运行中
-- **上次工程层执行：** 2026-03-26 16:00 UTC（成功）
-- **上次 Agent 激活：** 2026-03-26 14:30 UTC
-- **上次向 Brain 汇报：** 2026-03-26 14:30 UTC（推送了 2 篇论文）
-- **当前待汇报队列：** 2 条（阈值 5）
+## Current Status
+- **Running status:** Running normally
+- **Last engineering layer execution:** 2026-03-26 16:00 UTC (success)
+- **Last Agent activation:** 2026-03-26 14:30 UTC
+- **Last report to Brain:** 2026-03-26 14:30 UTC (pushed 2 papers)
+- **Current pending report queue:** 2 items (threshold 5)
 
-## 统计
-- 扫描总数：1,247
-- 规则筛选通过：189
-- Agent 精读保留：47
-- 汇报给 Brain：47
-- Brain 推送给用户：15
+## Statistics
+- Total scanned: 1,247
+- Passed rule filtering: 189
+- Retained after Agent deep read: 47
+- Reported to Brain: 47
+- Pushed to user by Brain: 15
 
-## 数据库状态
-- 已记录 ID：1,247 条
-- 数据库大小：2.3 MB
+## Database Status
+- Recorded IDs: 1,247 entries
+- Database size: 2.3 MB
 
-## 最近一次执行摘要
-2026-03-26 16:00: 从 cs.AI 和 cs.CL 抓取了 31 篇新论文，
-规则筛选保留 4 篇，未达到 Agent 激活阈值（需要 5 篇），继续积攒。
+## Last Execution Summary
+2026-03-26 16:00: Fetched 31 new papers from cs.AI and cs.CL,
+rule filtering retained 4 papers, did not reach Agent activation threshold (requires 5), continuing to accumulate.
 ```
 
 ---
 
-## 5. workspace/REPORTS.md 格式
+## 5. workspace/REPORTS.md Format
 
-历史汇报记录的简要摘要：
+Brief summaries of historical reports:
 
 ```markdown
-# 历史汇报记录
+# Historical Report Records
 
 ## 2026-03-26 14:30 — Consultation #cs-001
-- 汇报 5 条，Brain 推送 2 条，丢弃 3 条
-- 推送：论文 A（Multi-Agent Planning）、论文 B（Chain-of-Reasoning）
-- Brain 反馈：多关注方法论创新
+- Reported 5 items, Brain pushed 2, discarded 3
+- Pushed: Paper A (Multi-Agent Planning), Paper B (Chain-of-Reasoning)
+- Brain feedback: Focus more on methodological innovation
 
 ## 2026-03-25 20:00 — Consultation #cs-000
-- 汇报 3 条，Brain 推送 1 条，丢弃 2 条
-- 推送：论文 C（Efficient Retrieval-Augmented Generation）
+- Reported 3 items, Brain pushed 1, discarded 2
+- Pushed: Paper C (Efficient Retrieval-Augmented Generation)
 ```
 
 ---
 
-## 6. reports/ 目录管理
+## 6. reports/ Directory Management
 
-### pending/ — 待汇报
+### pending/ — Pending Reports
 
-每批一个 JSON 文件，由触手 Agent 层生成：
+One JSON file per batch, generated by the tentacle Agent layer:
 
 ```json
 {
@@ -187,9 +187,9 @@
     {
       "id": "arxiv-2403-12345",
       "title": "Multi-Agent Planning with LLM",
-      "summary": "提出了 MAPLE 框架...",
+      "summary": "Proposes the MAPLE framework...",
       "judgment": "important",
-      "reason": "与用户 OpenCeph 项目直接相关",
+      "reason": "Directly relevant to the user's OpenCeph project",
       "source_url": "https://arxiv.org/abs/2403.12345",
       "metadata": {}
     }
@@ -197,9 +197,9 @@
 }
 ```
 
-### submitted/ — 已提交归档
+### submitted/ — Submitted Archive
 
-consultation 结束后，将 pending 内容 + consultation 结果合并归档：
+After a consultation ends, merge the pending content with consultation results and archive:
 
 ```json
 {
@@ -208,7 +208,7 @@ consultation 结束后，将 pending 内容 + consultation 结果合并归档：
   "items_count": 5,
   "pushed_count": 2,
   "discarded_count": 3,
-  "brain_feedback": "多关注方法论创新",
+  "brain_feedback": "Focus more on methodological innovation",
   "items": [ ... ]
 }
 ```

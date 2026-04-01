@@ -53,9 +53,9 @@ export async function assembleSystemPrompt(
     // Section 5: Tentacle Awareness
     const tentacleGuidance = [
       "",
-      "想了解某个触手的详细进度，read 它的 workspace/STATUS.md。",
-      "想看触手的运行日志，用 inspect_tentacle_log。",
-      "部署和管理触手的完整规程在你的 AGENTS.md 里。",
+      "To check a tentacle's detailed progress, read its workspace/STATUS.md.",
+      "To view a tentacle's runtime logs, use inspect_tentacle_log.",
+      "The full procedures for deploying and managing tentacles are in your AGENTS.md.",
     ].join("\n")
     sections.push(
       options.tentacleSummary

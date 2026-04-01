@@ -1,54 +1,54 @@
-# openceph-runtime Python 库 API 参考
+# openceph-runtime Python Library API Reference
 
-**文件位置：** `contracts/skill-tentacle-spec/reference/openceph-runtime-api.md`  
-**用途：** Python 触手使用的 `openceph-runtime` 库完整 API
+**File location:** `contracts/skill-tentacle-spec/reference/openceph-runtime-api.md`
+**Purpose:** Complete API for the `openceph-runtime` library used by Python tentacles
 
 ---
 
-## 安装
+## Installation
 
 ```
 pip install openceph-runtime
 ```
 
-或在 `requirements.txt` 中：
+Or in `requirements.txt`:
 ```
 openceph-runtime>=1.0.0
 ```
 
 ---
 
-## 模块总览
+## Module Overview
 
 ```python
 from openceph_runtime import (
-    IpcClient,        # IPC 通信客户端
-    LlmClient,        # LLM Gateway 调用客户端
-    AgentLoop,        # Agent Loop 执行器
-    TentacleLogger,   # 结构化日志
-    TentacleConfig,   # 配置加载
-    StateDB,          # SQLite 状态管理
-    load_tools,       # 加载 tools.json
+    IpcClient,        # IPC communication client
+    LlmClient,        # LLM Gateway call client
+    AgentLoop,        # Agent Loop executor
+    TentacleLogger,   # Structured logging
+    TentacleConfig,   # Configuration loader
+    StateDB,          # SQLite state management
+    load_tools,       # Load tools.json
 )
 ```
 
-所有类都从环境变量自动读取配置，无需手动传参。
+All classes automatically read configuration from environment variables; no manual parameter passing is needed.
 
 ---
 
 ## IpcClient
 
-### 初始化
+### Initialization
 
 ```python
 ipc = IpcClient()
-# 自动读取 OPENCEPH_TENTACLE_ID 环境变量
-# 自动配置 stdin/stdout JSON Lines 通信
+# Automatically reads the OPENCEPH_TENTACLE_ID environment variable
+# Automatically configures stdin/stdout JSON Lines communication
 ```
 
 ### connect()
 
-启动 stdin 监听线程。在 main() 开头调用。
+Starts the stdin listener thread. Call at the beginning of main().
 
 ```python
 ipc.connect()
@@ -56,55 +56,55 @@ ipc.connect()
 
 ### register(purpose, runtime)
 
-注册触手。**启动后必须立即调用。**
+Registers the tentacle. **Must be called immediately after startup.**
 
 ```python
 ipc.register(
-    purpose="监控 arXiv 最新论文",
+    purpose="Monitor latest arXiv papers",
     runtime="python",
 )
 ```
 
 ### consultation_request(mode, summary, initial_message, context=None)
 
-发起 consultation session。
+Initiates a consultation session.
 
 ```python
 ipc.consultation_request(
     mode="batch",                           # "batch" | "realtime" | "periodic"
-    summary="发现 5 篇值得关注的论文",
-    initial_message="完整汇报内容...",       # 自然语言，作为 consultation 第一条 user 消息
-    context={"total_scanned": 87},          # 可选，额外上下文
+    summary="Found 5 papers worth attention",
+    initial_message="Full report content...",  # Natural language, serves as the first user message of the consultation
+    context={"total_scanned": 87},          # Optional, additional context
 )
 ```
 
 ### consultation_message(consultation_id, message)
 
-在 consultation 中发送后续消息（回答 Brain 追问等）。
+Sends a follow-up message during a consultation (e.g., answering Brain's follow-up questions).
 
 ```python
 ipc.consultation_message(
     consultation_id="cs-uuid-001",
-    message="第一篇论文的具体方法是...",
+    message="The methodology of the first paper is...",
 )
 ```
 
 ### status_update(status, pending_items, health, **kwargs)
 
-发送状态更新。
+Sends a status update.
 
 ```python
 ipc.status_update(
     status="idle",          # "idle" | "running" | "paused" | "error"
     pending_items=2,
     health="ok",            # "ok" | "degraded" | "error"
-    next_scheduled_run="2026-03-27T04:00:00Z",  # 可选
+    next_scheduled_run="2026-03-27T04:00:00Z",  # Optional
 )
 ```
 
 ### @ipc.on_directive
 
-注册 directive handler。**必须至少处理 pause、resume、kill。**
+Registers a directive handler. **Must handle at least pause, resume, and kill.**
 
 ```python
 @ipc.on_directive
@@ -125,7 +125,7 @@ def handle_directive(action: str, params: dict):
 
 ### @ipc.on_consultation_reply
 
-注册 consultation 回复 handler。
+Registers a consultation reply handler.
 
 ```python
 @ipc.on_consultation_reply
@@ -136,18 +136,18 @@ def handle_reply(
     should_continue: bool,
 ):
     if not should_continue:
-        # consultation 结束
+        # Consultation ended
         finalize_consultation(consultation_id)
         return
 
-    # Brain 追问了，用 Agent 能力回答
+    # Brain asked a follow-up question; answer using Agent capabilities
     answer = process_brain_question(message)
     ipc.consultation_message(consultation_id, answer)
 ```
 
 ### @ipc.on_consultation_close
 
-注册 consultation 关闭 handler。
+Registers a consultation close handler.
 
 ```python
 @ipc.on_consultation_close
@@ -158,18 +158,18 @@ def handle_close(
     discarded_count: int,
     feedback: str | None,
 ):
-    # 清理 pending 队列
+    # Clear the pending queue
     clear_submitted_items(consultation_id)
-    # 更新 workspace 文件
+    # Update workspace files
     update_status_md()
     update_reports_md(consultation_id, pushed_count, discarded_count, feedback)
-    # 归档
+    # Archive
     archive_consultation(consultation_id)
 ```
 
 ### tool_request(tool_name, tool_call_id, arguments) → dict
 
-请求 Brain 执行共享工具。**同步阻塞等待结果。**
+Requests Brain to execute a shared tool. **Synchronously blocks until result is received.**
 
 ```python
 result = ipc.tool_request(
@@ -177,12 +177,12 @@ result = ipc.tool_request(
     tool_call_id="call_abc123",
     arguments={"query": "MAPLE framework"},
 )
-# result = {"content": "搜索结果..."}
+# result = {"content": "Search results..."}
 ```
 
 ### close()
 
-关闭连接。在触手退出前调用。
+Closes the connection. Call before the tentacle exits.
 
 ```python
 ipc.close()
@@ -192,41 +192,41 @@ ipc.close()
 
 ## LlmClient
 
-### 初始化
+### Initialization
 
 ```python
 llm = LlmClient()
-# 自动读取 OPENCEPH_LLM_GATEWAY_URL 和 OPENCEPH_LLM_GATEWAY_TOKEN
+# Automatically reads OPENCEPH_LLM_GATEWAY_URL and OPENCEPH_LLM_GATEWAY_TOKEN
 ```
 
 ### chat(messages, tools=None, temperature=None, max_tokens=None, model="default") → LlmResponse
 
-调用 LLM。
+Calls the LLM.
 
 ```python
 response = llm.chat(
     messages=[
-        {"role": "system", "content": "你是论文分析专家"},
-        {"role": "user", "content": "分析这篇论文..."},
+        {"role": "system", "content": "You are a paper analysis expert"},
+        {"role": "user", "content": "Analyze this paper..."},
     ],
-    tools=my_tools,       # 可选，OpenAI function 格式
-    temperature=0.3,      # 可选
-    max_tokens=4096,      # 可选
-    model="default",      # 可选，默认使用配置
+    tools=my_tools,       # Optional, OpenAI function format
+    temperature=0.3,      # Optional
+    max_tokens=4096,      # Optional
+    model="default",      # Optional, uses configured default
 )
 ```
 
-### LlmResponse 对象
+### LlmResponse Object
 
 ```python
-response.content        # str | None — 文本回复
-response.tool_calls     # list | None — tool_call 列表
+response.content        # str | None — Text reply
+response.tool_calls     # list | None — List of tool_calls
 response.finish_reason  # str — "stop" | "tool_calls"
 response.usage          # dict — {"prompt_tokens": N, "completion_tokens": N}
-response.raw            # dict — 原始 API 响应
+response.raw            # dict — Raw API response
 ```
 
-### tool_call 结构
+### tool_call Structure
 
 ```python
 for tc in response.tool_calls:
@@ -239,7 +239,7 @@ for tc in response.tool_calls:
 
 ## AgentLoop
 
-### 初始化
+### Initialization
 
 ```python
 from openceph_runtime import AgentLoop, load_tools
@@ -247,29 +247,29 @@ from openceph_runtime import AgentLoop, load_tools
 tools = load_tools("tools/tools.json")
 
 agent = AgentLoop(
-    system_prompt="你是论文分析专家...",
-    tools=tools,            # 自建工具 + 共享工具合并列表
-    max_turns=20,           # 最大轮次
-    ipc=ipc,                # IpcClient 实例，用于共享工具调用
+    system_prompt="You are a paper analysis expert...",
+    tools=tools,            # Merged list of custom tools + shared tools
+    max_turns=20,           # Maximum number of turns
+    ipc=ipc,                # IpcClient instance, used for shared tool calls
 )
 ```
 
 ### run(user_message, tool_executor) → str
 
-执行多轮 Agent Loop，返回最终结论文本。
+Executes a multi-turn Agent Loop and returns the final conclusion text.
 
 ```python
 result = agent.run(
-    user_message="从以下 23 篇论文摘要中筛选值得推荐的：\n\n...",
+    user_message="From the following 23 paper abstracts, select the ones worth recommending:\n\n...",
     tool_executor=my_tool_executor,
 )
 ```
 
-### tool_executor 函数签名
+### tool_executor Function Signature
 
 ```python
 def my_tool_executor(tool_name: str, arguments: dict) -> str:
-    """执行自建工具，返回结果字符串"""
+    """Execute a custom tool and return the result string"""
     if tool_name == "search_arxiv":
         results = arxiv_api.search(arguments["query"])
         return json.dumps(results)
@@ -280,29 +280,29 @@ def my_tool_executor(tool_name: str, arguments: dict) -> str:
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
 ```
 
-**AgentLoop 内部逻辑：**
-1. 构造 messages = [system, user]
-2. 调用 LlmClient.chat(messages, tools)
-3. 如果有 tool_calls：
-   - `openceph_` 前缀 → ipc.tool_request() 发给 Brain
-   - 其他 → tool_executor() 本地执行
-   - 将 tool result 追加到 messages，回到步骤 2
-4. 如果无 tool_calls（finish_reason=stop）→ 返回 content
+**AgentLoop Internal Logic:**
+1. Construct messages = [system, user]
+2. Call LlmClient.chat(messages, tools)
+3. If there are tool_calls:
+   - `openceph_` prefix → ipc.tool_request() sends to Brain
+   - Others → tool_executor() executes locally
+   - Append tool result to messages, go back to step 2
+4. If no tool_calls (finish_reason=stop) → return content
 
 ---
 
 ## TentacleLogger
 
-### 初始化
+### Initialization
 
 ```python
 log = TentacleLogger()
-# 自动写入 logs/daemon.log、logs/agent.log、logs/consultation.log
+# Automatically writes to logs/daemon.log, logs/agent.log, logs/consultation.log
 ```
 
 ### daemon(event, **kwargs)
 
-工程层日志。
+Engineering layer logs.
 
 ```python
 log.daemon("fetch_start", source="arxiv", categories=["cs.AI", "cs.CL"])
@@ -314,7 +314,7 @@ log.daemon("cycle_complete", scanned=87, filtered=23, pending=23)
 
 ### agent(event, **kwargs)
 
-Agent 层日志。
+Agent layer logs.
 
 ```python
 log.agent("activated", pending_count=23)
@@ -325,7 +325,7 @@ log.agent("result", items_kept=5, items_discarded=18)
 
 ### consultation(event, **kwargs)
 
-Consultation 层日志。
+Consultation layer logs.
 
 ```python
 log.consultation("started", id="cs-001", item_count=5)
@@ -338,44 +338,44 @@ log.consultation("ended", id="cs-001", pushed=2, discarded=3, duration_ms=45000)
 
 ## TentacleConfig
 
-### 初始化
+### Initialization
 
 ```python
 config = TentacleConfig()
-# 自动从 .env 和环境变量加载
+# Automatically loads from .env and environment variables
 ```
 
-### 属性
+### Properties
 
 ```python
 config.tentacle_id       # str — OPENCEPH_TENTACLE_ID
 config.tentacle_dir      # Path — OPENCEPH_TENTACLE_DIR
 config.workspace         # Path — OPENCEPH_TENTACLE_WORKSPACE
 config.trigger_mode      # str — OPENCEPH_TRIGGER_MODE
-config.purpose           # str — 从 tentacle.json 读取
-config.poll_interval     # int — 从 tentacle.json 读取（秒）
-config.batch_threshold   # int — 从 SKILL.md consultation.batchThreshold 读取
+config.purpose           # str — Read from tentacle.json
+config.poll_interval     # int — Read from tentacle.json (seconds)
+config.batch_threshold   # int — Read from SKILL.md consultation.batchThreshold
 
-# 自定义配置（从 .env 读取的非 OPENCEPH_ 前缀变量）
+# Custom configuration (non-OPENCEPH_ prefixed variables read from .env)
 config.get("ARXIV_CATEGORIES")        # str
 config.get("ARXIV_KEYWORDS")          # str
-config.get("MY_CUSTOM_VAR", "default")  # 带默认值
+config.get("MY_CUSTOM_VAR", "default")  # With default value
 ```
 
 ---
 
 ## StateDB
 
-### 初始化
+### Initialization
 
 ```python
 db = StateDB()
-# 自动在 data/state.db 创建 SQLite 数据库
+# Automatically creates a SQLite database at data/state.db
 ```
 
 ### is_processed(key) → bool
 
-检查某个 key 是否已被处理。
+Checks whether a given key has already been processed.
 
 ```python
 if not db.is_processed("arxiv:2403.12345"):
@@ -385,20 +385,20 @@ if not db.is_processed("arxiv:2403.12345"):
 
 ### mark_processed(key)
 
-标记 key 为已处理。
+Marks a key as processed.
 
 ### increment_stat(name, value=1)
 
-增加统计计数。
+Increments a statistic counter.
 
 ```python
 db.increment_stat("total_scanned", 87)
-db.increment_stat("agent_activated")  # 默认 +1
+db.increment_stat("agent_activated")  # Default +1
 ```
 
 ### get_stat(name) → int
 
-获取统计值。
+Gets a statistic value.
 
 ```python
 total = db.get_stat("total_scanned")  # 1247
@@ -406,7 +406,7 @@ total = db.get_stat("total_scanned")  # 1247
 
 ### set_state(key, value)
 
-存储任意状态值（JSON 序列化）。
+Stores an arbitrary state value (JSON serialized).
 
 ```python
 db.set_state("last_fetch_cursor", "2026-03-26T16:00:00Z")
@@ -414,7 +414,7 @@ db.set_state("last_fetch_cursor", "2026-03-26T16:00:00Z")
 
 ### get_state(key, default=None) → any
 
-获取状态值。
+Gets a state value.
 
 ```python
 cursor = db.get_state("last_fetch_cursor")
@@ -424,11 +424,11 @@ cursor = db.get_state("last_fetch_cursor")
 
 ## load_tools(path) → list
 
-加载 tools.json 文件，返回 OpenAI function 格式的工具列表。自动追加共享工具定义。
+Loads a tools.json file and returns a list of tools in OpenAI function format. Automatically appends shared tool definitions.
 
 ```python
 from openceph_runtime import load_tools
 
 tools = load_tools("tools/tools.json")
-# 返回：自建工具列表 + openceph_web_search + openceph_web_fetch + ...
+# Returns: custom tools list + openceph_web_search + openceph_web_fetch + ...
 ```

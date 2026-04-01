@@ -84,7 +84,7 @@ export class TentacleLifecycleManager {
     const status = this.tentacleManager.getStatus(tentacleId)
     if (status) {
       await this.registry.updateStatus(tentacleId, "weakened", {
-        health: "削弱",
+        health: "weakened",
       })
     }
 
@@ -160,7 +160,7 @@ export class TentacleLifecycleManager {
 
     // 3. Update registry status
     await this.registry.updateStatus(tentacleId, "running", {
-      health: "良好",
+      health: "good",
     })
 
     brainLogger.info("tentacle_strengthened", {
@@ -235,7 +235,7 @@ export class TentacleLifecycleManager {
     await this.registry.updateStatus(config.newTentacleId, "running", {
       purpose: config.newPurpose,
       runtime: normalized.runtime,
-      health: "良好",
+      health: "good",
     })
 
     brainLogger.info("tentacle_merged", {

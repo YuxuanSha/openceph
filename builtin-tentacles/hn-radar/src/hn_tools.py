@@ -1,5 +1,5 @@
 """
-HN RSS Tool System — 封装 hnrss.org + Algolia 全部能力为可调用的 tools.
+HN RSS Tool System — wraps all hnrss.org + Algolia capabilities as callable tools.
 
 6 tools: hn_newest, hn_frontpage, hn_ask, hn_show, hn_search, hn_best
 
@@ -150,7 +150,7 @@ def enrich_items(items: list[dict], log=None, max_enrich: int = 20):
 # ─── Tool implementations ─────────────────────────────────────
 
 def hn_newest(args: dict, log=None) -> list[dict]:
-    """获取 HN 最新帖子。按发帖时间倒序。"""
+    """Fetch latest HN posts, sorted by post time descending."""
     count = min(int(args.get("count", 50)), 100)
     points = int(args.get("points", 0))
     query = args.get("query", "")
@@ -163,13 +163,13 @@ def hn_newest(args: dict, log=None) -> list[dict]:
 
 
 def hn_frontpage(args: dict, log=None) -> list[dict]:
-    """获取 HN 当前首页热帖。"""
+    """Fetch current HN frontpage hot posts."""
     count = min(int(args.get("count", 30)), 100)
     return _fetch_rss(f"/frontpage?count={count}", log)
 
 
 def hn_ask(args: dict, log=None) -> list[dict]:
-    """获取 Ask HN 帖子。"""
+    """Fetch Ask HN posts."""
     count = min(int(args.get("count", 20)), 100)
     points = int(args.get("points", 0))
     endpoint = f"/ask?count={count}"
@@ -179,7 +179,7 @@ def hn_ask(args: dict, log=None) -> list[dict]:
 
 
 def hn_show(args: dict, log=None) -> list[dict]:
-    """获取 Show HN 帖子。"""
+    """Fetch Show HN posts."""
     count = min(int(args.get("count", 20)), 100)
     points = int(args.get("points", 0))
     endpoint = f"/show?count={count}"
@@ -189,7 +189,7 @@ def hn_show(args: dict, log=None) -> list[dict]:
 
 
 def hn_search(args: dict, log=None) -> list[dict]:
-    """搜索 HN 帖子（Algolia API，支持时间窗）。"""
+    """Search HN posts (Algolia API, supports time window)."""
     query = args.get("query", "")
     if not query:
         return []
@@ -201,7 +201,7 @@ def hn_search(args: dict, log=None) -> list[dict]:
 
 
 def hn_best(args: dict, log=None) -> list[dict]:
-    """获取 HN 近期最佳帖子。"""
+    """Fetch recent best HN posts."""
     count = min(int(args.get("count", 30)), 100)
     return _fetch_rss(f"/best?count={count}", log)
 

@@ -1,116 +1,116 @@
-# OpenCeph skill_tentacle 规范文档
+# OpenCeph skill_tentacle Specification Document
 
-**本文档是 Claude Code 生成或修改 skill_tentacle 时的权威规范。**  
-**每次工作前必须完整阅读本文件以及 `reference/` 目录下的所有参考文件。**
-
----
-
-## 目录
-
-- [1. 概述](#1-概述)
-- [2. 目录结构规范](#2-目录结构规范)
-- [3. 三层架构规范](#3-三层架构规范)
-- [4. SKILL.md 规范](#4-skillmd-规范)
-- [5. IPC 通信规范](#5-ipc-通信规范)
-- [6. LLM Gateway 调用规范](#6-llm-gateway-调用规范)
-- [7. openceph-runtime 库使用规范](#7-openceph-runtime-库使用规范)
-- [8. Workspace 文件规范](#8-workspace-文件规范)
-- [9. 工具系统规范](#9-工具系统规范)
-- [10. 日志规范](#10-日志规范)
-- [11. 绝对禁止清单](#11-绝对禁止清单)
-- [12. 验证清单](#12-验证清单)
-
-**补充参考文件（按需查阅 `reference/` 目录）：**
-- `reference/ipc-protocol.md` — IPC 消息格式完整定义
-- `reference/llm-gateway-api.md` — LLM Gateway HTTP API 完整参考
-- `reference/workspace-structure.md` — workspace 目录完整规范
-- `reference/openceph-runtime-api.md` — openceph-runtime 库 API 完整参考
-- `reference/consultation-protocol.md` — consultation session 协议完整参考
-
-**可运行的完整模板（按需参考 `examples/` 目录）：**
-- `examples/python-template/` — Python 触手完整可运行模板
-- `examples/typescript-template/` — TypeScript 触手完整可运行模板
+**This document is the authoritative specification for Claude Code when generating or modifying skill_tentacles.**
+**Before starting any work, you must read this file in its entirety as well as all reference files in the `reference/` directory.**
 
 ---
 
-## 1. 概述
+## Table of Contents
 
-skill_tentacle 是 OpenCeph 系统中的长时运行 Agent 程序。每个触手是一个独立子进程，具备三层能力：工程 Daemon（持续运行）、Agent 能力（LLM 推理）、Consultation 能力（与 Brain 对话）。
+- [1. Overview](#1-overview)
+- [2. Directory Structure Specification](#2-directory-structure-specification)
+- [3. Three-Layer Architecture Specification](#3-three-layer-architecture-specification)
+- [4. SKILL.md Specification](#4-skillmd-specification)
+- [5. IPC Communication Specification](#5-ipc-communication-specification)
+- [6. LLM Gateway Invocation Specification](#6-llm-gateway-invocation-specification)
+- [7. openceph-runtime Library Usage Specification](#7-openceph-runtime-library-usage-specification)
+- [8. Workspace File Specification](#8-workspace-file-specification)
+- [9. Tool System Specification](#9-tool-system-specification)
+- [10. Logging Specification](#10-logging-specification)
+- [11. Absolute Prohibition List](#11-absolute-prohibition-list)
+- [12. Validation Checklist](#12-validation-checklist)
 
-触手通过 stdin/stdout 与 Brain 通信（IPC），通过 HTTP 调用 LLM Gateway 获取模型能力。触手不可直接联系用户，所有用户触达必须经过 Brain。
+**Supplementary reference files (consult the `reference/` directory as needed):**
+- `reference/ipc-protocol.md` — Complete IPC message format definitions
+- `reference/llm-gateway-api.md` — Complete LLM Gateway HTTP API reference
+- `reference/workspace-structure.md` — Complete workspace directory specification
+- `reference/openceph-runtime-api.md` — Complete openceph-runtime library API reference
+- `reference/consultation-protocol.md` — Complete consultation session protocol reference
+
+**Runnable complete templates (refer to the `examples/` directory as needed):**
+- `examples/python-template/` — Complete runnable Python tentacle template
+- `examples/typescript-template/` — Complete runnable TypeScript tentacle template
 
 ---
 
-## 2. 目录结构规范
+## 1. Overview
 
-生成或修改的 skill_tentacle 必须遵循以下目录结构：
+A skill_tentacle is a long-running Agent program within the OpenCeph system. Each tentacle is an independent subprocess with three layers of capability: an Engineering Daemon (continuously running), Agent capability (LLM reasoning), and Consultation capability (dialogue with the Brain).
+
+Tentacles communicate with the Brain via stdin/stdout (IPC) and call the LLM Gateway over HTTP to access model capabilities. Tentacles must not contact the user directly; all user-facing communication must go through the Brain.
+
+---
+
+## 2. Directory Structure Specification
+
+Generated or modified skill_tentacles must follow this directory structure:
 
 ```
 {tentacle_dir}/
-├── SKILL.md                    # [必须] 蓝图元数据
-├── README.md                   # [推荐] 开发说明
+├── SKILL.md                    # [Required] Blueprint metadata
+├── README.md                   # [Recommended] Development notes
 │
-├── prompt/                     # [必须] Agent prompt 文件
-│   └── SYSTEM.md               # [必须] 触手 Agent 的 system prompt
+├── prompt/                     # [Required] Agent prompt files
+│   └── SYSTEM.md               # [Required] Tentacle Agent's system prompt
 │
-├── src/                        # [必须] 工程代码
-│   ├── main.py                 # [必须] Python 入口（或 index.ts）
-│   └── requirements.txt        # [必须] Python 依赖（或 package.json）
+├── src/                        # [Required] Engineering code
+│   ├── main.py                 # [Required] Python entry point (or index.ts)
+│   └── requirements.txt        # [Required] Python dependencies (or package.json)
 │
-├── tools/                      # [如有自建工具则必须]
-│   └── tools.json              # 工具定义（OpenAI function 格式）
+├── tools/                      # [Required if custom tools exist]
+│   └── tools.json              # Tool definitions (OpenAI function format)
 │
-├── workspace/                  # [运行时自动创建]
-│   ├── SYSTEM.md               # 从 prompt/SYSTEM.md 填充而来
-│   ├── STATUS.md               # 触手自维护的运行状态
-│   └── REPORTS.md              # 历史汇报摘要
+├── workspace/                  # [Created automatically at runtime]
+│   ├── SYSTEM.md               # Populated from prompt/SYSTEM.md
+│   ├── STATUS.md               # Runtime status maintained by the tentacle
+│   └── REPORTS.md              # Historical report summaries
 │
-├── data/                       # [运行时自动创建]
-│   └── state.db                # SQLite 数据库
+├── data/                       # [Created automatically at runtime]
+│   └── state.db                # SQLite database
 │
-├── reports/                    # [运行时自动创建]
-│   ├── pending/                # 待汇报内容
-│   └── submitted/              # 已汇报归档
+├── reports/                    # [Created automatically at runtime]
+│   ├── pending/                # Content awaiting report
+│   └── submitted/              # Archived submitted reports
 │
-├── logs/                       # [运行时自动创建]
-│   ├── daemon.log              # 工程层日志
-│   ├── agent.log               # Agent 层日志
-│   └── consultation.log        # Consultation 日志
+├── logs/                       # [Created automatically at runtime]
+│   ├── daemon.log              # Engineering layer logs
+│   ├── agent.log               # Agent layer logs
+│   └── consultation.log        # Consultation logs
 │
-└── .env                        # [部署时自动生成，不要手动创建]
+└── .env                        # [Auto-generated at deployment, do not create manually]
 ```
 
 ---
 
-## 3. 三层架构规范
+## 3. Three-Layer Architecture Specification
 
-每个触手必须实现三层架构。**不可将三层混在一起。**
+Every tentacle must implement the three-layer architecture. **The three layers must not be mixed together.**
 
-### 第一层：工程 Daemon
+### Layer 1: Engineering Daemon
 
-- 持续运行的主循环
-- 纯代码逻辑，**不消耗 LLM token**
-- 负责：数据抓取、规则过滤、去重、积攒
-- 定时触发或事件驱动
-- 用 `while not shutdown` 循环实现
+- Continuously running main loop
+- Pure code logic, **does not consume LLM tokens**
+- Responsible for: data fetching, rule-based filtering, deduplication, accumulation
+- Triggered on a timer or by events
+- Implemented with a `while not shutdown` loop
 
-### 第二层：Agent 能力
+### Layer 2: Agent Capability
 
-- 按策略激活（积攒达到阈值、有紧急项、太久没激活）
-- 调用 LLM Gateway 做分析、判断、生成
-- 使用 `workspace/SYSTEM.md` 作为 system prompt
-- 支持 tool call（自建工具 + 共享工具）
-- 结果用于准备 consultation 内容
+- Activated by policy (accumulation reaches threshold, urgent items exist, too long since last activation)
+- Calls the LLM Gateway for analysis, judgment, and generation
+- Uses `workspace/SYSTEM.md` as the system prompt
+- Supports tool calls (custom tools + shared tools)
+- Results are used to prepare consultation content
 
-### 第三层：Consultation
+### Layer 3: Consultation
 
-- 当 Agent 层筛选出值得汇报的内容后发起
-- 通过 IPC 发送 `consultation_request`
-- 在 consultation session 中作为 "user" 与 Brain 多轮对话
-- 处理 Brain 的追问（可能需要再次调用 Agent 能力获取详情）
-- 收到 `consultation_close` 后清理 pending 队列
+- Initiated when the Agent layer identifies content worth reporting
+- Sends a `consultation_request` via IPC
+- Acts as the "user" in a multi-turn dialogue with the Brain during the consultation session
+- Handles follow-up questions from the Brain (may need to invoke Agent capability again for details)
+- Cleans up the pending queue after receiving `consultation_close`
 
-### 主循环伪代码（必须遵循此结构）
+### Main Loop Pseudocode (this structure must be followed)
 
 ```python
 from openceph_runtime import IpcClient, LlmClient, AgentLoop, TentacleLogger, StateDB
@@ -129,15 +129,15 @@ def main():
             wait(60)
             continue
 
-        # ─── 第一层：工程 Daemon ───
-        raw_items = fetch_new_data()          # 纯代码，不调 LLM
-        filtered = rule_filter(raw_items)     # 纯代码，不调 LLM
+        # ─── Layer 1: Engineering Daemon ───
+        raw_items = fetch_new_data()          # Pure code, no LLM calls
+        filtered = rule_filter(raw_items)     # Pure code, no LLM calls
         pending.extend(filtered)
 
-        # ─── 判断是否激活第二层 ───
+        # ─── Decide whether to activate Layer 2 ───
         if len(pending) >= BATCH_THRESHOLD:
 
-            # ─── 第二层：Agent ───
+            # ─── Layer 2: Agent ───
             agent_result = run_agent_loop(
                 system_prompt=read("workspace/SYSTEM.md"),
                 user_message=format_items(pending),
@@ -146,10 +146,10 @@ def main():
             consultation_items = parse_result(agent_result)
 
             if consultation_items:
-                # ─── 第三层：Consultation ───
+                # ─── Layer 3: Consultation ───
                 ipc.consultation_request(
                     mode="batch",
-                    summary=f"发现 {len(consultation_items)} 条内容",
+                    summary=f"Found {len(consultation_items)} items",
                     initial_message=format_report(consultation_items),
                 )
                 pending = []
@@ -160,57 +160,57 @@ def main():
 
 ---
 
-## 4. SKILL.md 规范
+## 4. SKILL.md Specification
 
-SKILL.md 使用 YAML frontmatter，必须包含以下字段：
+SKILL.md uses YAML frontmatter and must include the following fields:
 
 ```yaml
 ---
-name: tentacle-name              # 必须，小写连字符
-description: |                   # 必须，多行描述
-  一句话说明这个触手做什么。
-version: 1.0.0                   # 必须，语义化版本
+name: tentacle-name              # Required, lowercase with hyphens
+description: |                   # Required, multi-line description
+  A one-sentence explanation of what this tentacle does.
+version: 1.0.0                   # Required, semantic versioning
 
 metadata:
   openceph:
-    emoji: "🎓"                  # 必须，用于显示
-    category: "monitoring"       # 必须：monitoring | execution | curation | tool
-    trigger_keywords:            # 必须，Brain 匹配用
-      - "关键词1"
-      - "关键词2"
+    emoji: "🎓"                  # Required, used for display
+    category: "monitoring"       # Required: monitoring | execution | curation | tool
+    trigger_keywords:            # Required, used by Brain for matching
+      - "keyword1"
+      - "keyword2"
 
     tentacle:
-      spawnable: true            # 必须
-      runtime: python            # 必须：python | typescript | go | shell
-      entry: src/main.py         # 必须，入口文件路径
-      default_trigger: "every 12 hours"  # 必须
+      spawnable: true            # Required
+      runtime: python            # Required: python | typescript | go | shell
+      entry: src/main.py         # Required, entry file path
+      default_trigger: "every 12 hours"  # Required
 
-      setup_commands:            # 必须，部署时执行
+      setup_commands:            # Required, executed at deployment
         - "python3 -m venv venv"
         - "venv/bin/pip install -r src/requirements.txt"
 
       requires:
-        bins: ["python3"]        # 本机必须安装的命令
-        llm: true                # 是否需要 LLM Gateway
-        env: []                  # 额外必需的环境变量名
+        bins: ["python3"]        # Commands that must be installed on the host
+        llm: true                # Whether LLM Gateway is needed
+        env: []                  # Additional required environment variable names
 
       capabilities:
-        daemon:                  # 第一层能力列表
+        daemon:                  # Layer 1 capability list
           - "api_integration"
-        agent:                   # 第二层能力列表
+        agent:                   # Layer 2 capability list
           - "content_analysis"
-        consultation:            # 第三层策略
+        consultation:            # Layer 3 strategy
           mode: "batch"          # batch | realtime | periodic
-          batch_threshold: 5     # batch 模式阈值
+          batch_threshold: 5     # Threshold for batch mode
 
       infrastructure:
         needsDatabase: true
         needsLlm: true
         needsHttpServer: false
 
-      customizable:              # 用户可配置的字段
+      customizable:              # User-configurable fields
         - field: "categories"
-          description: "分类列表"
+          description: "Category list"
           env_var: "MY_CATEGORIES"
           default: "cs.AI,cs.CL"
 ---
@@ -218,16 +218,16 @@ metadata:
 
 ---
 
-## 5. IPC 通信规范
+## 5. IPC Communication Specification
 
-### 传输层
+### Transport Layer
 
-- **协议：** stdin/stdout JSON Lines
-- 每条消息独占一行，以 `\n` 结尾
-- stderr 用于日志，不参与 IPC
-- 编码：UTF-8
+- **Protocol:** stdin/stdout JSON Lines
+- Each message occupies a single line, terminated by `\n`
+- stderr is used for logging and does not participate in IPC
+- Encoding: UTF-8
 
-### 消息信封格式
+### Message Envelope Format
 
 ```json
 {
@@ -239,9 +239,9 @@ metadata:
 }
 ```
 
-### 必须实现的消息类型
+### Required Message Types
 
-#### 启动注册（触手 → Brain，启动后立即发送）
+#### Startup Registration (Tentacle → Brain, sent immediately after startup)
 
 ```json
 {
@@ -250,7 +250,7 @@ metadata:
   "message_id": "msg-001",
   "timestamp": "...",
   "payload": {
-    "purpose": "触手目的描述",
+    "purpose": "Description of the tentacle's purpose",
     "runtime": "python",
     "pid": 12346,
     "capabilities": {
@@ -264,7 +264,7 @@ metadata:
 }
 ```
 
-#### Consultation 请求（触手 → Brain）
+#### Consultation Request (Tentacle → Brain)
 
 ```json
 {
@@ -274,19 +274,19 @@ metadata:
   "timestamp": "...",
   "payload": {
     "mode": "batch",
-    "summary": "发现 5 条值得关注的内容",
+    "summary": "Found 5 items worth attention",
     "item_count": 5,
     "urgency": "normal",
-    "initial_message": "完整的汇报内容（自然语言）...",
+    "initial_message": "Full report content (natural language)...",
     "context": {
       "total_scanned": 87,
-      "time_range": "最近 12 小时"
+      "time_range": "Last 12 hours"
     }
   }
 }
 ```
 
-#### Consultation 消息（触手 → Brain，后续对话）
+#### Consultation Message (Tentacle → Brain, subsequent dialogue)
 
 ```json
 {
@@ -296,12 +296,12 @@ metadata:
   "timestamp": "...",
   "payload": {
     "consultation_id": "cs-uuid-001",
-    "message": "Brain 追问的回答..."
+    "message": "Response to Brain's follow-up question..."
   }
 }
 ```
 
-#### 状态更新（触手 → Brain）
+#### Status Update (Tentacle → Brain)
 
 ```json
 {
@@ -319,7 +319,7 @@ metadata:
 }
 ```
 
-#### 心跳响应（触手 → Brain）
+#### Heartbeat Response (Tentacle → Brain)
 
 ```json
 {
@@ -331,9 +331,9 @@ metadata:
 }
 ```
 
-### 必须处理的 Brain → 触手 消息
+### Required Brain → Tentacle Messages to Handle
 
-#### Directive（Brain → 触手）
+#### Directive (Brain → Tentacle)
 
 ```json
 {
@@ -343,15 +343,15 @@ metadata:
   "timestamp": "...",
   "payload": {
     "action": "pause | resume | kill | run_now | config_update | flush_pending",
-    "reason": "原因描述",
+    "reason": "Reason description",
     "params": {}
   }
 }
 ```
 
-**必须处理的 action：** `pause`、`resume`、`kill`。其他为可选。
+**Required actions to handle:** `pause`, `resume`, `kill`. Others are optional.
 
-#### Consultation Reply（Brain → 触手）
+#### Consultation Reply (Brain → Tentacle)
 
 ```json
 {
@@ -361,18 +361,18 @@ metadata:
   "timestamp": "...",
   "payload": {
     "consultation_id": "cs-uuid-001",
-    "message": "Brain 的回复内容...",
+    "message": "Brain's reply content...",
     "actions_taken": [
-      { "action": "pushed_to_user", "item_ref": "项目描述", "push_id": "p-001" }
+      { "action": "pushed_to_user", "item_ref": "Item description", "push_id": "p-001" }
     ],
     "continue": true
   }
 }
 ```
 
-当 `continue` 为 `false` 时，consultation 结束。
+When `continue` is `false`, the consultation ends.
 
-#### Consultation Close（Brain → 触手）
+#### Consultation Close (Brain → Tentacle)
 
 ```json
 {
@@ -382,15 +382,15 @@ metadata:
   "timestamp": "...",
   "payload": {
     "consultation_id": "cs-uuid-001",
-    "summary": "本次汇报处理结果",
+    "summary": "Processing results for this report",
     "pushed_count": 2,
     "discarded_count": 3,
-    "feedback": "后续筛选建议"
+    "feedback": "Suggestions for future filtering"
   }
 }
 ```
 
-#### Heartbeat Ping（Brain → 触手）
+#### Heartbeat Ping (Brain → Tentacle)
 
 ```json
 {
@@ -402,20 +402,20 @@ metadata:
 }
 ```
 
-收到后必须在 10 秒内发送 `heartbeat_ack`。
+A `heartbeat_ack` must be sent within 10 seconds of receiving this message.
 
 ---
 
-## 6. LLM Gateway 调用规范
+## 6. LLM Gateway Invocation Specification
 
-### 端点和认证
+### Endpoint and Authentication
 
 ```
-URL:   环境变量 OPENCEPH_LLM_GATEWAY_URL（如 http://127.0.0.1:18792）
-Token: 环境变量 OPENCEPH_LLM_GATEWAY_TOKEN
+URL:   Environment variable OPENCEPH_LLM_GATEWAY_URL (e.g., http://127.0.0.1:18792)
+Token: Environment variable OPENCEPH_LLM_GATEWAY_TOKEN
 ```
 
-### 请求格式（OpenAI-compatible）
+### Request Format (OpenAI-compatible)
 
 ```
 POST {OPENCEPH_LLM_GATEWAY_URL}/v1/chat/completions
@@ -439,16 +439,16 @@ Headers:
 }
 ```
 
-**`model` 字段：** 传 `"default"` 或省略即可，Gateway 会使用 openceph.json 中配置的触手模型。
+**`model` field:** Pass `"default"` or omit it; the Gateway will use the tentacle model configured in openceph.json.
 
-### 响应格式（OpenAI-compatible）
+### Response Format (OpenAI-compatible)
 
 ```json
 {
   "choices": [{
     "message": {
       "role": "assistant",
-      "content": "回复内容",
+      "content": "Reply content",
       "tool_calls": null
     },
     "finish_reason": "stop"
@@ -461,7 +461,7 @@ Headers:
 }
 ```
 
-### 带 tool_calls 的响应
+### Response with tool_calls
 
 ```json
 {
@@ -485,86 +485,86 @@ Headers:
 
 ---
 
-## 7. openceph-runtime 库使用规范
+## 7. openceph-runtime Library Usage Specification
 
-**Python 触手必须使用 `openceph-runtime` 库。不要自己实现 IPC 或 LLM 调用。**
+**Python tentacles must use the `openceph-runtime` library. Do not implement IPC or LLM calls yourself.**
 
-### 安装
+### Installation
 
-在 `requirements.txt` 中添加：
+Add the following to `requirements.txt`:
 
 ```
 openceph-runtime>=1.0.0
 ```
 
-### 核心 API
+### Core API
 
 ```python
 from openceph_runtime import (
-    IpcClient,        # IPC 通信
-    LlmClient,        # LLM Gateway 调用
-    AgentLoop,        # Agent Loop 执行
-    TentacleLogger,   # 结构化日志
-    TentacleConfig,   # 配置加载
-    StateDB,          # SQLite 状态数据库
-    load_tools,       # 加载 tools.json
+    IpcClient,        # IPC communication
+    LlmClient,        # LLM Gateway calls
+    AgentLoop,        # Agent Loop execution
+    TentacleLogger,   # Structured logging
+    TentacleConfig,   # Configuration loading
+    StateDB,          # SQLite state database
+    load_tools,       # Load tools.json
 )
 ```
 
-### IpcClient 用法
+### IpcClient Usage
 
 ```python
-ipc = IpcClient()  # 自动从 env vars 读取配置
+ipc = IpcClient()  # Automatically reads configuration from env vars
 
-# 注册（启动后立即调用）
-ipc.register(purpose="触手目的", runtime="python")
+# Register (call immediately after startup)
+ipc.register(purpose="Tentacle purpose", runtime="python")
 
-# 发起 consultation
+# Initiate a consultation
 ipc.consultation_request(
     mode="batch",
-    summary="发现 5 条内容",
-    initial_message="汇报内容...",
+    summary="Found 5 items",
+    initial_message="Report content...",
     context={"total_scanned": 87},
 )
 
-# consultation 中后续消息
-ipc.consultation_message(consultation_id, message="回答追问...")
+# Send subsequent messages during consultation
+ipc.consultation_message(consultation_id, message="Answering follow-up question...")
 
-# 注册 directive handler
+# Register directive handler
 @ipc.on_directive
 def handle(action, params):
     if action == "pause": ...
     elif action == "kill": ...
 
-# 注册 consultation reply handler
+# Register consultation reply handler
 @ipc.on_consultation_reply
 def handle(consultation_id, message, actions_taken, should_continue):
     if not should_continue:
-        # consultation 结束
+        # Consultation ended
         return
-    # Brain 追问了，处理追问
+    # Brain asked a follow-up question, process it
     answer = process_question(message)
     ipc.consultation_message(consultation_id, answer)
 
-# 状态更新
+# Status update
 ipc.status_update(status="idle", pending_items=2, health="ok")
 ```
 
-### LlmClient 用法
+### LlmClient Usage
 
 ```python
-llm = LlmClient()  # 自动从 env vars 读取 Gateway URL 和 Token
+llm = LlmClient()  # Automatically reads Gateway URL and Token from env vars
 
 response = llm.chat([
-    {"role": "system", "content": "你是论文分析专家"},
-    {"role": "user", "content": "分析这篇论文..."},
+    {"role": "system", "content": "You are a paper analysis expert"},
+    {"role": "user", "content": "Analyze this paper..."},
 ], temperature=0.3)
 
-print(response.content)       # 文本回复
-print(response.tool_calls)    # tool_calls 列表（可能为 None）
+print(response.content)       # Text reply
+print(response.tool_calls)    # List of tool_calls (may be None)
 ```
 
-### AgentLoop 用法
+### AgentLoop Usage
 
 ```python
 tools = load_tools("tools/tools.json")
@@ -573,16 +573,16 @@ agent = AgentLoop(
     system_prompt=open("workspace/SYSTEM.md").read(),
     tools=tools,
     max_turns=20,
-    ipc=ipc,  # 用于共享工具调用
+    ipc=ipc,  # Used for shared tool calls
 )
 
 result = agent.run(
-    user_message="分析以下内容...",
-    tool_executor=my_local_tool_executor,  # 自建工具执行函数
+    user_message="Analyze the following content...",
+    tool_executor=my_local_tool_executor,  # Custom tool execution function
 )
 ```
 
-### TentacleLogger 用法
+### TentacleLogger Usage
 
 ```python
 log = TentacleLogger()
@@ -592,13 +592,13 @@ log.agent("llm_call", model="default", input_tokens=1200)
 log.consultation("started", consultation_id="cs-001")
 ```
 
-### StateDB 用法
+### StateDB Usage
 
 ```python
-db = StateDB()  # 自动在 data/state.db 创建
+db = StateDB()  # Automatically creates data/state.db
 
 if not db.is_processed("arxiv:2403.12345"):
-    # 处理...
+    # Process...
     db.mark_processed("arxiv:2403.12345")
 
 db.increment_stat("total_scanned", 87)
@@ -606,69 +606,69 @@ db.increment_stat("total_scanned", 87)
 
 ---
 
-## 8. Workspace 文件规范
+## 8. Workspace File Specification
 
 ### workspace/STATUS.md
 
-触手每次运行后必须更新此文件。Brain 可以直接读取。
+The tentacle must update this file after each run. The Brain can read it directly.
 
 ```markdown
-# {触手名} — 运行状态
+# {Tentacle Name} — Runtime Status
 
-## 当前状态
-- **运行状态：** 正常运行中 | 已暂停 | 出错
-- **上次工程层执行：** {时间}（成功 | 失败）
-- **上次 Agent 激活：** {时间}
-- **上次向 Brain 汇报：** {时间}（推送了 N 条）
-- **当前待汇报队列：** N 条（阈值 M）
+## Current State
+- **Running Status:** Running normally | Paused | Error
+- **Last Engineering Layer Execution:** {time} (Success | Failure)
+- **Last Agent Activation:** {time}
+- **Last Report to Brain:** {time} (Pushed N items)
+- **Current Pending Report Queue:** N items (threshold M)
 
-## 统计
-- 扫描总数：N
-- 规则筛选：N
-- Agent 精读后保留：N
-- 已汇报给 Brain：N
-- Brain 推送给用户：N
+## Statistics
+- Total scanned: N
+- Rule-filtered: N
+- Retained after Agent deep-read: N
+- Reported to Brain: N
+- Pushed to user by Brain: N
 
-## 最近一次执行摘要
-{简短描述最近一次执行的结果}
+## Latest Execution Summary
+{Brief description of the most recent execution results}
 ```
 
 ### workspace/REPORTS.md
 
-历史汇报记录的简要摘要。
+Brief summaries of historical report records.
 
 ```markdown
-# 历史汇报记录
+# Historical Report Records
 
 ## 2026-03-26 14:30 — Consultation #cs-001
-- 汇报 5 条，Brain 推送 2 条，丢弃 3 条
-- 推送内容：论文 A（Multi-Agent Planning）、论文 B（Chain-of-Reasoning）
-- Brain 反馈：多关注方法论创新
+- Reported 5 items, Brain pushed 2, discarded 3
+- Pushed content: Paper A (Multi-Agent Planning), Paper B (Chain-of-Reasoning)
+- Brain feedback: Focus more on methodological innovation
 
 ## 2026-03-25 20:00 — Consultation #cs-000
-- 汇报 3 条，Brain 推送 1 条，丢弃 2 条
+- Reported 3 items, Brain pushed 1, discarded 2
 ```
 
 ### prompt/SYSTEM.md
 
-支持占位符，部署时由 SkillSpawner 填充：
+Supports placeholders that are filled by the SkillSpawner at deployment:
 
-| 占位符 | 来源 |
-|--------|------|
+| Placeholder | Source |
+|-------------|--------|
 | `{TENTACLE_NAME}` | SKILL.md name |
 | `{TENTACLE_EMOJI}` | SKILL.md emoji |
-| `{USER_NAME}` | USER.md 用户名 |
-| `{USER_FOCUS_AREAS}` | USER.md 关注领域 |
-| `{QUALITY_CRITERIA}` | customizable 字段值 |
-| `{TOOLS_DESCRIPTION}` | 从 tools.json 生成 |
+| `{USER_NAME}` | USER.md username |
+| `{USER_FOCUS_AREAS}` | USER.md areas of interest |
+| `{QUALITY_CRITERIA}` | Value from customizable fields |
+| `{TOOLS_DESCRIPTION}` | Generated from tools.json |
 
 ---
 
-## 9. 工具系统规范
+## 9. Tool System Specification
 
-### 自建工具
+### Custom Tools
 
-在 `tools/tools.json` 中定义，OpenAI function calling 格式：
+Defined in `tools/tools.json` using the OpenAI function calling format:
 
 ```json
 [
@@ -676,11 +676,11 @@ db.increment_stat("total_scanned", 87)
     "type": "function",
     "function": {
       "name": "search_arxiv",
-      "description": "搜索 arXiv 论文",
+      "description": "Search arXiv papers",
       "parameters": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "description": "搜索关键词" }
+          "query": { "type": "string", "description": "Search keywords" }
         },
         "required": ["query"]
       }
@@ -689,47 +689,47 @@ db.increment_stat("total_scanned", 87)
 ]
 ```
 
-自建工具由触手代码内部实现执行。
+Custom tools are executed internally by the tentacle's code.
 
-### 共享工具（openceph 提供）
+### Shared Tools (provided by openceph)
 
-工具名以 `openceph_` 前缀开头，通过 IPC 请求 Brain 代为执行。
+Tool names are prefixed with `openceph_` and are executed by the Brain via IPC request.
 
-可用的共享工具：
+Available shared tools:
 
-| 工具名 | 说明 |
-|--------|------|
-| `openceph_web_search` | 网页搜索 |
-| `openceph_web_fetch` | 抓取网页内容 |
-| `openceph_read_file` | 读取文件（限触手 workspace） |
-| `openceph_write_file` | 写入文件（限触手 workspace） |
+| Tool Name | Description |
+|-----------|-------------|
+| `openceph_web_search` | Web search |
+| `openceph_web_fetch` | Fetch web page content |
+| `openceph_read_file` | Read file (limited to tentacle workspace) |
+| `openceph_write_file` | Write file (limited to tentacle workspace) |
 
-Agent Loop 收到 LLM 返回的 `tool_calls` 时：
-- 工具名以 `openceph_` 开头 → 通过 `ipc.tool_request()` 请求 Brain 执行
-- 其他 → 本地执行（自建工具）
+When the Agent Loop receives `tool_calls` returned by the LLM:
+- Tool name starts with `openceph_` → Request Brain execution via `ipc.tool_request()`
+- Otherwise → Execute locally (custom tool)
 
 ---
 
-## 10. 日志规范
+## 10. Logging Specification
 
-使用 `TentacleLogger`，**不要自己写日志到文件**。
+Use `TentacleLogger`. **Do not write logs to files yourself.**
 
-日志自动写入：
-- 工程层事件 → `logs/daemon.log`
-- Agent 层事件 → `logs/agent.log`
-- Consultation 事件 → `logs/consultation.log`
+Logs are automatically written to:
+- Engineering layer events → `logs/daemon.log`
+- Agent layer events → `logs/agent.log`
+- Consultation events → `logs/consultation.log`
 
-格式：JSON Lines，每行一条。
+Format: JSON Lines, one entry per line.
 
 ```python
 log = TentacleLogger()
 
-# 工程层
+# Engineering layer
 log.daemon("fetch_start", source="arxiv", categories=["cs.AI"])
 log.daemon("fetch_end", items=87, duration_ms=2340)
 log.daemon("error", error="Connection timeout", exc_info=True)
 
-# Agent 层
+# Agent layer
 log.agent("activated", pending_count=23)
 log.agent("llm_call", model="default", input_tokens=4200, output_tokens=890)
 log.agent("tool_call", tool="search_arxiv", arguments={"query": "..."})
@@ -742,64 +742,64 @@ log.consultation("ended", id="cs-001", pushed=2, discarded=3)
 
 ---
 
-## 11. 绝对禁止清单
+## 11. Absolute Prohibition List
 
-以下行为**绝对禁止**，违反将导致验证失败：
+The following behaviors are **absolutely prohibited**. Violations will cause validation failure:
 
-| 禁止行为 | 原因 |
-|---------|------|
-| 硬编码 API key（如 `OPENROUTER_API_KEY="sk-..."`) | 安全风险，必须通过 LLM Gateway |
-| 硬编码 provider URL（如 `openrouter.ai/api/v1`） | 必须通过 LLM Gateway |
-| 直接调用外部 LLM API（requests.post 到 openrouter 等） | 必须通过 LLM Gateway |
-| 自己实现 IPC 通信（socket/stdin 原始读写） | 必须使用 openceph-runtime IpcClient |
-| 自己实现 Agent Loop（不用 AgentLoop 类） | 推荐使用 openceph-runtime AgentLoop |
-| 使用 `os.system()`、`subprocess.Popen()` | 安全风险 |
-| 使用 `exec()`、`eval()`、`__import__()` | 安全风险 |
-| 写入触手 workspace 以外的目录 | 权限违规 |
-| 读取 `~/.openceph/credentials/` | 权限违规 |
-| 读取 `~/.openceph/workspace/`（Brain workspace） | 权限违规 |
-| 直接向用户发消息（绕过 Brain） | 架构违规 |
-| 在第一层 daemon 中调用 LLM | 架构违规，第一层不消耗 token |
-
----
-
-## 12. 验证清单
-
-生成或修改代码后，确保以下检查全部通过：
-
-### 结构检查
-- [ ] `src/main.py`（或 `index.ts`）存在
-- [ ] `SKILL.md` 存在且 frontmatter 格式正确
-- [ ] `prompt/SYSTEM.md` 存在
-- [ ] `src/requirements.txt`（或 `package.json`）存在
-- [ ] 如果有自建工具：`tools/tools.json` 存在且格式正确
-
-### IPC 契约检查
-- [ ] 代码中 `from openceph_runtime import IpcClient`
-- [ ] 启动后调用 `ipc.register()`
-- [ ] 实现了 `consultation_request` 发送逻辑
-- [ ] 注册了 `@ipc.on_directive` handler，至少处理 `pause`、`resume`、`kill`
-- [ ] 注册了 `@ipc.on_consultation_reply` handler
-
-### LLM Gateway 检查
-- [ ] 代码中 `from openceph_runtime import LlmClient`（如果需要 LLM）
-- [ ] 没有硬编码任何 API key 或 provider URL
-- [ ] 没有直接调用外部 LLM API
-
-### 三层架构检查
-- [ ] 第一层 daemon 循环存在（while not shutdown）
-- [ ] 第一层中不调用 LLM
-- [ ] 第二层 Agent 激活有明确的触发条件
-- [ ] 第三层 consultation 在 Agent 筛选后发起
-
-### 安全检查
-- [ ] 没有 `os.system()`、`subprocess.Popen()`、`exec()`、`eval()`
-- [ ] 文件写入仅限触手自身目录
-
-### Dry-run 测试
-- [ ] `python src/main.py --dry-run` 成功退出（检查配置和依赖）
+| Prohibited Behavior | Reason |
+|---------------------|--------|
+| Hardcoding API keys (e.g., `OPENROUTER_API_KEY="sk-..."`) | Security risk; must use LLM Gateway |
+| Hardcoding provider URLs (e.g., `openrouter.ai/api/v1`) | Must use LLM Gateway |
+| Directly calling external LLM APIs (requests.post to openrouter, etc.) | Must use LLM Gateway |
+| Implementing IPC communication yourself (raw socket/stdin read/write) | Must use openceph-runtime IpcClient |
+| Implementing Agent Loop yourself (without using the AgentLoop class) | Recommended to use openceph-runtime AgentLoop |
+| Using `os.system()`, `subprocess.Popen()` | Security risk |
+| Using `exec()`, `eval()`, `__import__()` | Security risk |
+| Writing to directories outside the tentacle workspace | Permission violation |
+| Reading `~/.openceph/credentials/` | Permission violation |
+| Reading `~/.openceph/workspace/` (Brain workspace) | Permission violation |
+| Sending messages directly to the user (bypassing Brain) | Architecture violation |
+| Calling LLM in the Layer 1 daemon | Architecture violation; Layer 1 must not consume tokens |
 
 ---
 
-*本规范文档是 Claude Code 生成合格 skill_tentacle 的唯一权威来源。*
-*如有疑问，优先查阅 `reference/` 目录下的详细参考文件和 `examples/` 目录下的可运行模板。*
+## 12. Validation Checklist
+
+After generating or modifying code, ensure the following checks all pass:
+
+### Structure Checks
+- [ ] `src/main.py` (or `index.ts`) exists
+- [ ] `SKILL.md` exists with correct frontmatter format
+- [ ] `prompt/SYSTEM.md` exists
+- [ ] `src/requirements.txt` (or `package.json`) exists
+- [ ] If custom tools exist: `tools/tools.json` exists with correct format
+
+### IPC Contract Checks
+- [ ] Code contains `from openceph_runtime import IpcClient`
+- [ ] `ipc.register()` is called after startup
+- [ ] `consultation_request` sending logic is implemented
+- [ ] `@ipc.on_directive` handler is registered, handling at minimum `pause`, `resume`, `kill`
+- [ ] `@ipc.on_consultation_reply` handler is registered
+
+### LLM Gateway Checks
+- [ ] Code contains `from openceph_runtime import LlmClient` (if LLM is needed)
+- [ ] No hardcoded API keys or provider URLs
+- [ ] No direct calls to external LLM APIs
+
+### Three-Layer Architecture Checks
+- [ ] Layer 1 daemon loop exists (while not shutdown)
+- [ ] Layer 1 does not call the LLM
+- [ ] Layer 2 Agent activation has a clear trigger condition
+- [ ] Layer 3 consultation is initiated after Agent filtering
+
+### Security Checks
+- [ ] No `os.system()`, `subprocess.Popen()`, `exec()`, `eval()`
+- [ ] File writes are limited to the tentacle's own directory
+
+### Dry-run Test
+- [ ] `python src/main.py --dry-run` exits successfully (checks configuration and dependencies)
+
+---
+
+*This specification document is the sole authoritative source for Claude Code to generate compliant skill_tentacles.*
+*If in doubt, consult the detailed reference files in the `reference/` directory and the runnable templates in the `examples/` directory.*

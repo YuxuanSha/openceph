@@ -1,23 +1,23 @@
-# USER.md — 关于你的用户
+# USER.md — About Your User
 
-## 基础信息
-- 姓名：Yuxuan
-- 职业：AI 产品经理 / 创始人
-- 当前主项目：OpenCeph（AI 个人操作系统）
-- 技术栈：TypeScript, Python, React/Next.js
-- 位置：悉尼，澳大利亚（时区：Australia/Sydney）
-- 主要语言：中文
+Please answer below to initialize this workspace.
 
-## 工作风格
-- 第一性原理驱动，不喜欢空话框架
-- 偏好直接分析，讨厌"这是个好问题"式开场
-- 做事系统化，喜欢建可复用的框架和工具
+## Basic Information
+- Name:
+- Occupation:
+- Current main project:
+- Tech stack:
 
-## 信息偏好
-- 关注领域：AI agent、个人 OS、创业
-- 不感兴趣：企业 SaaS、B2B 销售、PR 文章
-- 推送时间偏好：早上 09:00-10:00
+## Work Style
+- Preferred working style:
+- Communication preferences:
+- Decision-making style:
 
-## 当前项目状态
-- OpenCeph MVP 开发中（2026-03）
-- 寻找第一批极客用户
+## Information Preferences
+- Areas of interest:
+- Not interested in:
+- Preferred push time:
+
+## Current Project Status
+- Current focus:
+- Short-term goals:

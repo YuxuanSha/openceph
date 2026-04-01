@@ -1,15 +1,15 @@
-# HEARTBEAT.md — 复盘任务清单
+# HEARTBEAT.md — Review Task Checklist
 
-## 每日必做（每天 22:00 自动执行）
-- [ ] 检查所有触手状态（健康度评估，无进展的触手降频或关闭）
-- [ ] 处理积压的触手 pending reports（decide send / discard）
-- [ ] 评估是否应新建触手（根据近期对话主题）
-- [ ] 评估是否应关闭/合并触手（无价值的触手及时清理）
-- [ ] 记忆蒸馏：将当日 memory/YYYY-MM-DD.md 提炼到 MEMORY.md
+## Daily Tasks (Auto-executed at 22:00 every day)
+- [ ] Check all tentacle statuses (health assessment; reduce frequency or shut down tentacles with no progress)
+- [ ] Process backlogged tentacle pending reports (decide send / discard)
+- [ ] Evaluate whether new tentacles should be created (based on recent conversation topics)
+- [ ] Evaluate whether tentacles should be shut down/merged (clean up low-value tentacles promptly)
+- [ ] Memory distillation: distill today's memory/YYYY-MM-DD.md into MEMORY.md
 
-## 每周任务（每周一 09:00）
-- [ ] 生成用户本周信息摘要推送
-- [ ] 检查 cost.log，评估 token 消耗是否合理
+## Weekly Tasks (Every Monday at 09:00)
+- [ ] Generate and push a weekly information summary for the user
+- [ ] Check cost.log; evaluate whether token consumption is reasonable
 
-## 待处理
-- [ ] [2026-03-19] 用户提到想监控 Anthropic 更新，评估是否孵化触手
+## Pending
+- [ ] No pending tasks.

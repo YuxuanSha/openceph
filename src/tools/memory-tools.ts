@@ -23,11 +23,11 @@ function createMemoryTools(options: {
   const readMemory: ToolDefinition = {
     name: "read_memory",
     label: "Read Memory",
-    description: "读取 MEMORY.md 的指定 section 或全文",
-    promptSnippet: "read_memory — 读取 MEMORY.md 或搜索记忆内容",
+    description: "Read a specified section or the full content of MEMORY.md",
+    promptSnippet: "read_memory — read MEMORY.md or search memory contents",
     parameters: Type.Object({
-      query: Type.Optional(Type.String({ description: "搜索关键词，不传返回全文" })),
-      section: Type.Optional(Type.String({ description: "指定读取的 section 名" })),
+      query: Type.Optional(Type.String({ description: "Search keyword; if omitted, returns the full content" })),
+      section: Type.Optional(Type.String({ description: "Specific section name to read" })),
     }),
     async execute(_id, params: any) {
       const content = await mm.readMemory(params.section, params.query)
@@ -38,11 +38,11 @@ function createMemoryTools(options: {
   const writeMemory: ToolDefinition = {
     name: "write_memory",
     label: "Write Memory",
-    description: "写入记忆到每日日志 memory/YYYY-MM-DD.md",
-    promptSnippet: "write_memory — 写入新记忆到每日日志",
+    description: "Write a memory entry to the daily log memory/YYYY-MM-DD.md",
+    promptSnippet: "write_memory — write a new memory entry to the daily log",
     parameters: Type.Object({
-      content: Type.String({ description: "要写入的记忆内容" }),
-      section: Type.String({ description: "目标 section" }),
+      content: Type.String({ description: "The memory content to write" }),
+      section: Type.String({ description: "Target section" }),
       tags: Type.Optional(Type.Array(Type.String())),
     }),
     async execute(_id, params: any) {
@@ -55,11 +55,11 @@ function createMemoryTools(options: {
   const updateMemory: ToolDefinition = {
     name: "update_memory",
     label: "Update Memory",
-    description: "更新已有记忆条目",
-    promptSnippet: "update_memory — 更新已有记忆条目",
+    description: "Update an existing memory entry",
+    promptSnippet: "update_memory — update an existing memory entry",
     parameters: Type.Object({
-      memory_id: Type.String({ description: "记忆 ID，格式：YYYY-MM-DD-NNN" }),
-      content: Type.String({ description: "新内容" }),
+      memory_id: Type.String({ description: "Memory ID, format: YYYY-MM-DD-NNN" }),
+      content: Type.String({ description: "New content" }),
     }),
     async execute(_id, params: any) {
       try {
@@ -75,8 +75,8 @@ function createMemoryTools(options: {
   const deleteMemory: ToolDefinition = {
     name: "delete_memory",
     label: "Delete Memory",
-    description: "删除指定记忆条目",
-    promptSnippet: "delete_memory — 删除指定记忆条目",
+    description: "Delete a specified memory entry",
+    promptSnippet: "delete_memory — delete a specified memory entry",
     parameters: Type.Object({
       memory_id: Type.String(),
     }),
@@ -94,10 +94,10 @@ function createMemoryTools(options: {
   const memoryGet: ToolDefinition = {
     name: "memory_get",
     label: "Get Memory File",
-    description: "读取指定 memory 文件",
-    promptSnippet: "memory_get — 读取指定 memory 文件内容",
+    description: "Read a specified memory file",
+    promptSnippet: "memory_get — read the contents of a specified memory file",
     parameters: Type.Object({
-      path: Type.String({ description: "memory 文件路径，如 2026-03-19.md" }),
+      path: Type.String({ description: "Memory file path, e.g. 2026-03-19.md" }),
       line_range: Type.Optional(Type.Object({
         start: Type.Number(),
         end: Type.Number(),
@@ -116,10 +116,10 @@ function createMemoryTools(options: {
   const memorySearch: ToolDefinition = {
     name: "memory_search",
     label: "Search Memory",
-    description: "搜索 MEMORY.md 和 memory/ 日志中的相关记忆",
-    promptSnippet: "memory_search — 搜索长期记忆与每日记忆日志",
+    description: "Search for relevant memories in MEMORY.md and memory/ daily logs",
+    promptSnippet: "memory_search — search long-term memory and daily memory logs",
     parameters: Type.Object({
-      query: Type.String({ description: "搜索查询" }),
+      query: Type.String({ description: "Search query" }),
       top_k: Type.Optional(Type.Number({ default: 5 })),
       include_transcripts: Type.Optional(Type.Boolean({ default: false })),
     }),
@@ -141,10 +141,10 @@ function createMemoryTools(options: {
   const distillMemory: ToolDefinition = {
     name: "distill_memory",
     label: "Distill Memory",
-    description: "将每日日志提炼到 MEMORY.md",
-    promptSnippet: "distill_memory — 将每日日志提炼到 MEMORY.md",
+    description: "Distill daily logs into MEMORY.md",
+    promptSnippet: "distill_memory — distill daily logs into MEMORY.md",
     parameters: Type.Object({
-      date: Type.Optional(Type.String({ description: "指定日期，不传则蒸馏昨天" })),
+      date: Type.Optional(Type.String({ description: "Specify a date; if omitted, distills yesterday's log" })),
     }),
     async execute(_id, params: any) {
       try {

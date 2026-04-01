@@ -126,7 +126,7 @@ export async function isNewWorkspace(workspaceDir: string): Promise<boolean> {
   try {
     const userContent = await fs.readFile(userPath, "utf-8")
     // Check if USER.md still has the template placeholder
-    return userContent.includes("{{") || userContent.includes("请回答以下") || userContent.length < 200
+    return userContent.includes("{{") || userContent.includes("please answer the following") || userContent.includes("please answer below") || userContent.length < 200
   } catch {
     return true // No USER.md means new workspace
   }

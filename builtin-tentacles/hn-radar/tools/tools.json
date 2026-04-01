@@ -3,13 +3,13 @@
     "type": "function",
     "function": {
       "name": "hn_newest",
-      "description": "获取 Hacker News 最新帖子。按发帖时间倒序，持续有新内容。",
+      "description": "Fetch the newest Hacker News posts. Sorted by submission time in descending order, with continuously fresh content.",
       "parameters": {
         "type": "object",
         "properties": {
-          "count": {"type": "integer", "description": "获取数量（最大100）", "default": 50},
-          "points": {"type": "integer", "description": "最低分数过滤（0=不过滤）", "default": 0},
-          "query": {"type": "string", "description": "可选：关键词搜索"}
+          "count": {"type": "integer", "description": "Number of posts to fetch (max 100)", "default": 50},
+          "points": {"type": "integer", "description": "Minimum score filter (0 = no filter)", "default": 0},
+          "query": {"type": "string", "description": "Optional: keyword search"}
         }
       }
     }
@@ -18,11 +18,11 @@
     "type": "function",
     "function": {
       "name": "hn_frontpage",
-      "description": "获取 Hacker News 当前首页热帖。经过 HN 社区投票筛选的高质量内容。",
+      "description": "Fetch the current Hacker News front page hot posts. High-quality content curated by HN community voting.",
       "parameters": {
         "type": "object",
         "properties": {
-          "count": {"type": "integer", "description": "获取数量（最大100）", "default": 30}
+          "count": {"type": "integer", "description": "Number of posts to fetch (max 100)", "default": 30}
         }
       }
     }
@@ -31,12 +31,12 @@
     "type": "function",
     "function": {
       "name": "hn_ask",
-      "description": "获取 Ask HN 帖子。技术问答和社区讨论。",
+      "description": "Fetch Ask HN posts. Technical Q&A and community discussions.",
       "parameters": {
         "type": "object",
         "properties": {
-          "count": {"type": "integer", "description": "获取数量", "default": 20},
-          "points": {"type": "integer", "description": "最低分数", "default": 0}
+          "count": {"type": "integer", "description": "Number of posts to fetch", "default": 20},
+          "points": {"type": "integer", "description": "Minimum score", "default": 0}
         }
       }
     }
@@ -45,12 +45,12 @@
     "type": "function",
     "function": {
       "name": "hn_show",
-      "description": "获取 Show HN 帖子。开发者展示的项目和产品。",
+      "description": "Fetch Show HN posts. Projects and products showcased by developers.",
       "parameters": {
         "type": "object",
         "properties": {
-          "count": {"type": "integer", "description": "获取数量", "default": 20},
-          "points": {"type": "integer", "description": "最低分数", "default": 0}
+          "count": {"type": "integer", "description": "Number of posts to fetch", "default": 20},
+          "points": {"type": "integer", "description": "Minimum score", "default": 0}
         }
       }
     }
@@ -59,14 +59,14 @@
     "type": "function",
     "function": {
       "name": "hn_search",
-      "description": "搜索 Hacker News 帖子。通过 Algolia API 按关键词和时间范围搜索。",
+      "description": "Search Hacker News posts. Search by keywords and time range via the Algolia API.",
       "parameters": {
         "type": "object",
         "properties": {
-          "query": {"type": "string", "description": "搜索关键词"},
-          "count": {"type": "integer", "description": "结果数量", "default": 20},
-          "since_hours": {"type": "integer", "description": "只返回最近 N 小时内的帖子", "default": 24},
-          "min_points": {"type": "integer", "description": "最低分数", "default": 0}
+          "query": {"type": "string", "description": "Search keywords"},
+          "count": {"type": "integer", "description": "Number of results", "default": 20},
+          "since_hours": {"type": "integer", "description": "Only return posts from the last N hours", "default": 24},
+          "min_points": {"type": "integer", "description": "Minimum score", "default": 0}
         },
         "required": ["query"]
       }
@@ -76,11 +76,11 @@
     "type": "function",
     "function": {
       "name": "hn_best",
-      "description": "获取 Hacker News 近期最佳帖子。高质量、高讨论的精选内容。",
+      "description": "Fetch the recent best Hacker News posts. Curated high-quality, highly-discussed content.",
       "parameters": {
         "type": "object",
         "properties": {
-          "count": {"type": "integer", "description": "获取数量", "default": 30}
+          "count": {"type": "integer", "description": "Number of posts to fetch", "default": 30}
         }
       }
     }

@@ -1,6 +1,6 @@
 """
-IPC 客户端 — OpenCeph stdin/stdout JSON Lines 协议
-所有 builtin skill_tentacle 直接复用此文件（由 openceph init/upgrade 自动注入）。
+IPC Client — OpenCeph stdin/stdout JSON Lines Protocol
+All builtin skill_tentacles reuse this file directly (auto-injected by openceph init/upgrade).
 
 Protocol (per spec §2):
   - Tentacle → Brain: write JSON Lines to stdout
@@ -55,7 +55,7 @@ class IpcClient:
         """
         self._heartbeat_handler = handler
 
-    # ── 契约 1：启动注册 ──
+    # ── Contract 1: Startup Registration ──
 
     def register(self, purpose: str, runtime: str):
         self._send("tentacle_register", {
@@ -64,7 +64,7 @@ class IpcClient:
             "pid": os.getpid(),
         })
 
-    # ── 契约 2：Consultation (per spec §3.2) ──
+    # ── Contract 2: Consultation (per spec §3.2) ──
 
     def consultation_request(self, mode: str, summary: str, initial_message: str, item_count: int = 0, context: dict = None):
         """Send a consultation request to Brain. Brain assigns consultation_id in reply."""
@@ -77,13 +77,13 @@ class IpcClient:
             "context": context or {},
         })
 
-    # ── 契约 4：心跳响应 (per spec §3.6: empty payload) ──
+    # ── Contract 4: Heartbeat Response (per spec §3.6: empty payload) ──
 
     def heartbeat_ack(self):
         """Send heartbeat_ack (liveness confirmation) to Brain. Spec: empty payload."""
         self._send("heartbeat_ack", {})
 
-    # ── 契约 4：状态上报 (per spec §3.5) ──
+    # ── Contract 4: Status Reporting (per spec §3.5) ──
 
     def status_update(self, status: str = "idle", pending_items: int = 0, health: str = "ok", stats: dict = None):
         """Send status_update to Brain. last_daemon_run and pending_items are required per spec."""
@@ -97,7 +97,7 @@ class IpcClient:
             payload["stats"] = stats
         self._send("status_update", payload)
 
-    # ── 内部实现 ──
+    # ── Internal Implementation ──
 
     def _send(self, msg_type: str, payload: dict):
         message = {

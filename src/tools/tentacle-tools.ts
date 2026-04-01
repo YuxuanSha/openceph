@@ -163,10 +163,10 @@ export function createTentacleTools(
   const listTentacles: ToolDefinition = {
     name: "list_tentacles",
     label: "List Tentacles",
-    description: "列出当前所有触手的状态。部署后确认触手是否成功上线时用这个。",
+    description: "List the status of all current tentacles. Use this to confirm whether a tentacle has successfully come online after deployment.",
     parameters: Type.Object({
       status_filter: Type.Optional(Type.String({
-        description: "按状态过滤。单个值或逗号分隔多个值。合法值：all / active / running / registered / deploying / pending / paused / weakened / killed / crashed。不确定就用 all。",
+        description: "Filter by status. Single value or comma-separated. Valid values: all / active / running / registered / deploying / pending / paused / weakened / killed / crashed. Use 'all' if unsure.",
       })),
     }),
     async execute(_id, params: any) {
@@ -214,12 +214,12 @@ export function createTentacleTools(
   const manageTentacle: ToolDefinition = {
     name: "manage_tentacle",
     label: "Manage Tentacle",
-    description: `管理触手的运行状态。
-    pause: 暂停（仅 running 状态可用）
-    resume: 恢复（仅 paused 状态可用）
-    kill: 停止（running 或 paused 可用）
-    run_now: 立即触发一次执行（仅 running 状态可用）
-    注意：killed 的触手不能 resume，需要重新 spawn_from_skill。`,
+    description: `Manage tentacle runtime state.
+    pause: Pause (only available when running)
+    resume: Resume (only available when paused)
+    kill: Stop (available when running or paused)
+    run_now: Trigger an immediate execution (only available when running)
+    Note: Killed tentacles cannot be resumed; you need to re-spawn via spawn_from_skill.`,
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("pause"),
@@ -315,7 +315,7 @@ export function createTentacleTools(
   const manageTentacleSchedule: ToolDefinition = {
     name: "manage_tentacle_schedule",
     label: "Manage Tentacle Schedule",
-    description: "管理触手的 cron、heartbeat 和自管频率",
+    description: "Manage tentacle cron jobs, heartbeat, and self-schedule frequency",
     parameters: Type.Object({
       tentacle_id: Type.String(),
       action: Type.Union([
@@ -462,7 +462,7 @@ export function createTentacleTools(
   const inspectTentacleLog: ToolDefinition = {
     name: "inspect_tentacle_log",
     label: "Inspect Tentacle Log",
-    description: "查看触手的运行日志。触手出问题时优先用这个看具体错误，比 web_search 有用得多。",
+    description: "View tentacle runtime logs. When a tentacle has issues, use this first to see specific errors — much more useful than web_search.",
     parameters: Type.Object({
       tentacle_id: Type.String(),
       n_lines: Type.Optional(Type.Number({ default: 50 })),
@@ -501,53 +501,53 @@ export function createTentacleTools(
     },
   }
 
-  // M3+M4: Unified spawn_from_skill — works with skill_tentacle, legacy SKILL blueprint, or from scratch
+  // Unified spawn_from_skill — works with skill_tentacle, classic SKILL blueprint, or from scratch
   const spawnFromSkill: ToolDefinition = {
     name: "spawn_from_skill",
     label: "Spawn Tentacle",
-    description: "创建并部署新的触手 Agent 系统。deploy 模式直接部署（不生成代码）；customize 模式基于已有 SKILL 修改逻辑；create 模式从零生成。",
+    description: "Create and deploy a new tentacle agent system. deploy mode deploys directly (no code generation); customize mode modifies logic based on an existing SKILL; create mode generates from scratch.",
     parameters: Type.Object({
-      // ── 结构化字段（代码层必须用的硬信息）──
+      // ── Structured fields (hard info required at code level) ──
       tentacle_id: Type.String({
-        description: "新触手 ID，格式 t_{简短英文标识}，如 t_hn_radar、t_arxiv_scout",
+        description: "New tentacle ID, format: t_{short_english_identifier}, e.g. t_hn_radar, t_arxiv_scout",
       }),
       skill_name: Type.Optional(Type.String({
-        description: "匹配的 SKILL 名称。场景 A/B 必填，场景 C 不填。",
+        description: "Matching SKILL name. Required for scenario A/B, omit for scenario C.",
       })),
       mode: Type.Union([
         Type.Literal("deploy"),
         Type.Literal("customize"),
         Type.Literal("create"),
       ], {
-        description: `部署模式——你需要自己判断：
-      deploy: 有现成 SKILL，代码不用改，只需要调配置。大多数内置触手部署用这个。
-      customize: 有现成 SKILL 但用户要改代码逻辑（加功能、改算法、换数据源）。
-      create: 没有匹配的 SKILL，需要从零开始。`,
+        description: `Deployment mode — you must determine this yourself:
+      deploy: A matching SKILL exists and code does not need changes, only configuration. Use this for most built-in tentacle deployments.
+      customize: A matching SKILL exists but the user wants to change code logic (add features, change algorithms, swap data sources).
+      create: No matching SKILL exists; must start from scratch.`,
       }),
       purpose: Type.String({
-        description: "触手的使命，一句话说清楚它是干什么的。",
+        description: "The tentacle's mission — describe in one sentence what it does.",
       }),
       config: Type.Optional(Type.Record(Type.String(), Type.String(), {
-        description: "配置参数，key 对应 SKILL.md 中 customizable 字段的 env_var 名称。场景 A 用这个传用户偏好。",
+        description: "Configuration parameters; keys correspond to env_var names in the customizable fields of SKILL.md. Use this for scenario A to pass user preferences.",
       })),
 
-      // ── 自由文本字段（Brain 写给 Claude Code 的需求描述）──
+      // ── Free-text field (Brain's requirement description written for Claude Code) ──
       brief: Type.Optional(Type.String({
-        description: `场景 B/C 的需求描述。你用自然语言写，像给一个工程师交代任务一样。
-      应该包含：用户是谁、想要什么、数据源是什么、触发频率、特殊要求。
-      场景 A 不需要填（配置通过 config 字段传递）。
-      场景 B 要说清楚在现有 SKILL 基础上改什么。
-      场景 C 要完整描述触手的使命和工作方式。`,
+        description: `Requirement description for scenarios B/C. Write in natural language, as if briefing an engineer.
+      Should include: who the user is, what they want, data sources, trigger frequency, special requirements.
+      Scenario A does not need this (configuration is passed via the config field).
+      Scenario B should clearly describe what to change on top of the existing SKILL.
+      Scenario C should fully describe the tentacle's mission and how it works.`,
       })),
 
       preferred_runtime: Type.Optional(Type.String({ default: "auto" })),
 
-      // M4 additions
+      // skill_tentacle options
       skill_tentacle_path: Type.Optional(Type.String({
-        description: "直接指向本地 skill_tentacle 目录或 .tentacle 文件路径，跳过 skill 搜索",
+        description: "Path to a local skill_tentacle directory or .tentacle file, skipping skill search",
       })),
       package_after: Type.Optional(Type.Boolean({
-        description: "场景 C 完成后是否打包为可分享的 skill_tentacle",
+        description: "Whether to package into a shareable skill_tentacle after scenario C completes",
         default: false,
       })),
     }),
@@ -578,8 +578,8 @@ export function createTentacleTools(
             runtime_status: result.spawned ? "running" : "not_running",
             requires_explicit_run_confirmation: !result.spawned,
             next_step: result.spawned
-              ? "触手已通过 spawn + registration 确认运行。"
-              : "触手目前未运行；如需运行，必须继续检查 spawned/running 状态或显式执行启动动作。",
+              ? "Tentacle is confirmed running via spawn + registration."
+              : "Tentacle is not currently running; to run it, you must check spawned/running status or explicitly perform a start action.",
           }
           brainLogger.info("skill_spawn_success", {
             tentacle_id: params.tentacle_id,
@@ -624,11 +624,11 @@ export function createTentacleTools(
     },
   }
 
-  // M3: Review all tentacles and get recommended actions
+  // Review all tentacles and get recommended actions
   const reviewTentacles: ToolDefinition = {
     name: "review_tentacles",
     label: "Review Tentacles",
-    description: "复盘所有活跃触手，基于健康度评分返回 weaken/kill/merge/strengthen 建议",
+    description: "Review all active tentacles and return weaken/kill/merge/strengthen recommendations based on health scores",
     parameters: Type.Object({}),
     async execute() {
       if (!reviewEngine) return ok("Error: review engine not available")

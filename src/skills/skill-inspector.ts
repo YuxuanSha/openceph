@@ -83,7 +83,7 @@ export class SkillInspector {
   }
 
   /**
-   * M4: Check if a skill directory is a valid skill_tentacle.
+   * Check if a skill directory is a valid skill_tentacle.
    * Conditions: metadata.openceph.tentacle.spawnable + prompt/SYSTEM.md + src/ + README.md
    */
   static isSkillTentacle(skillPath: string): boolean {
@@ -106,7 +106,7 @@ export class SkillInspector {
   }
 
   /**
-   * M4: Validate a skill_tentacle directory for structural completeness.
+   * Validate a skill_tentacle directory for structural completeness.
    */
   static async validateSkillTentacle(skillPath: string): Promise<SkillTentacleValidationResult> {
     const errors: ValidationError[] = []
@@ -116,13 +116,13 @@ export class SkillInspector {
     const required = ["SKILL.md", "README.md", "prompt/SYSTEM.md"]
     for (const f of required) {
       if (!existsSync(path.join(skillPath, f))) {
-        errors.push({ check: "structure" as any, message: `必须文件缺失：${f}` })
+        errors.push({ check: "structure" as any, message: `Required file missing: ${f}` })
       }
     }
 
     // src/ directory must exist and have a main entry
     if (!existsSync(path.join(skillPath, "src"))) {
-      errors.push({ check: "structure" as any, message: "src/ 目录缺失" })
+      errors.push({ check: "structure" as any, message: "src/ directory missing" })
     } else {
       // Check for entry file
       const hasMain = existsSync(path.join(skillPath, "src", "main.py"))
@@ -131,7 +131,7 @@ export class SkillInspector {
         || existsSync(path.join(skillPath, "src", "main.go"))
         || existsSync(path.join(skillPath, "src", "main.sh"))
       if (!hasMain) {
-        warnings.push("src/ 中未找到标准主入口文件（main.py / index.ts / main.go / main.sh）")
+        warnings.push("No standard main entry file found in src/ (main.py / index.ts / main.go / main.sh)")
       }
 
       // Check for dependency file
@@ -140,7 +140,7 @@ export class SkillInspector {
         || existsSync(path.join(skillPath, "package.json"))
         || existsSync(path.join(skillPath, "src", "go.mod"))
       if (!hasDeps) {
-        warnings.push("未找到依赖声明文件（requirements.txt / package.json / go.mod）")
+        warnings.push("No dependency declaration file found (requirements.txt / package.json / go.mod)")
       }
     }
 
@@ -156,11 +156,11 @@ export class SkillInspector {
         if (!tentacle || (tentacle.spawnable !== true && tentacle.spawnable !== "true")) {
           errors.push({
             check: "structure" as any,
-            message: "SKILL.md frontmatter 缺少 metadata.openceph.tentacle.spawnable: true",
+            message: "SKILL.md frontmatter missing metadata.openceph.tentacle.spawnable: true",
           })
         }
       } catch {
-        errors.push({ check: "structure" as any, message: "无法解析 SKILL.md" })
+        errors.push({ check: "structure" as any, message: "Failed to parse SKILL.md" })
       }
     }
 
@@ -169,14 +169,14 @@ export class SkillInspector {
     if (existsSync(readmePath)) {
       try {
         const readme = await fs.readFile(readmePath, "utf-8")
-        if (!readme.includes("环境变量") && !readme.includes("Environment")) {
-          warnings.push("README.md 缺少环境变量章节")
+        if (!readme.includes("Environment") && !readme.includes("env") && !readme.includes("Variables")) {
+          warnings.push("README.md missing environment variables section")
         }
-        if (!readme.includes("部署步骤") && !readme.includes("Deploy") && !readme.includes("Setup") && !readme.includes("部署")) {
-          warnings.push("README.md 缺少部署步骤章节")
+        if (!readme.includes("Deploy") && !readme.includes("Setup") && !readme.includes("Install") && !readme.includes("## ")) {
+          warnings.push("README.md missing deployment steps section")
         }
-        if (!readme.includes("启动命令") && !readme.includes("Start") && !readme.includes("启动")) {
-          warnings.push("README.md 缺少启动命令章节")
+        if (!readme.includes("Start") && !readme.includes("Command") && !readme.includes("Run")) {
+          warnings.push("README.md missing start command section")
         }
       } catch {
         // ignore read errors
@@ -190,10 +190,10 @@ export class SkillInspector {
       try {
         systemMdContent = await fs.readFile(systemMdPath, "utf-8")
         if (systemMdContent.trim().length < 50) {
-          errors.push({ check: "structure" as any, message: "prompt/SYSTEM.md 内容过短（< 50 字符）" })
+          errors.push({ check: "structure" as any, message: "prompt/SYSTEM.md content too short (< 50 characters)" })
         }
       } catch {
-        errors.push({ check: "structure" as any, message: "无法读取 prompt/SYSTEM.md" })
+        errors.push({ check: "structure" as any, message: "Failed to read prompt/SYSTEM.md" })
       }
     }
 
@@ -222,10 +222,10 @@ export class SkillInspector {
             const fieldName = typeof field.field === "string" ? field.field : "unknown"
 
             if (envVar && !srcContent.includes(envVar)) {
-              warnings.push(`customizable field "${fieldName}" 的 env_var "${envVar}" 未在 src/ 文件中找到引用`)
+              warnings.push(`customizable field "${fieldName}" env_var "${envVar}" not referenced in src/ files`)
             }
             if (promptPlaceholder && systemMdContent && !systemMdContent.includes(promptPlaceholder)) {
-              warnings.push(`customizable field "${fieldName}" 的 prompt_placeholder "${promptPlaceholder}" 未在 prompt/SYSTEM.md 中找到`)
+              warnings.push(`customizable field "${fieldName}" prompt_placeholder "${promptPlaceholder}" not found in prompt/SYSTEM.md`)
             }
           }
         }

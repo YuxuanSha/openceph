@@ -34,17 +34,17 @@ PENDING: list[dict] = []
 CONSULTATION_CONTEXT: dict[str, list[dict]] = {}
 
 # Layer 3 consultation answer prompt template (Scene E identity)
-CONSULTATION_ANSWER_PROMPT = """你是 {tentacle_name}，一个 Hacker News 监控分析触手。
-你的老板（Brain/Ceph）正在审阅你的汇报，并追问了一个问题。
+CONSULTATION_ANSWER_PROMPT = """You are {tentacle_name}, a Hacker News monitoring and analysis tentacle.
+Your boss (Brain/Ceph) is reviewing your report and has a follow-up question.
 
-老板的问题：
+Boss's question:
 {brain_question}
 
-你上次汇报的内容摘要：
+Summary of your last report:
 {items_summary}
 
-请用你的工具（websearch/webfetch）查找需要的信息，然后简洁回答老板。
-不要重复整个汇报，只回答被问到的部分。"""
+Use your tools (websearch/webfetch) to look up the needed information, then answer your boss concisely.
+Do not repeat the entire report — only answer the part that was asked about."""
 
 
 DEFAULT_TOPICS = ["AI", "LLM", "agent", "startup"]
@@ -149,11 +149,11 @@ def build_initial_message(summary: str, items: list[dict]) -> str:
     """Build detailed initial_message for consultation_request."""
     lines = [f"{summary}\n"]
     for i, item in enumerate(items, 1):
-        lines.append(f"{i}. {item.get('content', item.get('title', '(无标题)'))}")
+        lines.append(f"{i}. {item.get('content', item.get('title', '(no title)'))}")
         if item.get("reason"):
-            lines.append(f"   筛选理由：{item['reason']}")
+            lines.append(f"   Filter reason:{item['reason']}")
         if item.get("importance"):
-            lines.append(f"   重要性：{item['importance']}")
+            lines.append(f"   Importance:{item['importance']}")
         lines.append("")
     return "\n".join(lines)
 
@@ -167,7 +167,7 @@ def flush_pending(ipc: IpcClient, state: StateDB, log: TentacleLogger, findings:
     normal = [f for f in findings if f not in urgent]
 
     for item in urgent:
-        summary = f"[HN 热帖] {item.get('title', '')}"
+        summary = f"[HN Hot Post] {item.get('title', '')}"
         msg = build_initial_message(summary, [item])
         log.consultation("request_sent", mode="urgent", item_count=1,
                          title=str(item.get("title", ""))[:100])
@@ -193,7 +193,7 @@ def flush_pending(ipc: IpcClient, state: StateDB, log: TentacleLogger, findings:
     if should_flush and PENDING:
         payload = PENDING[:]
         PENDING = []
-        summary = f"[HN Radar] 发现 {len(payload)} 条值得关注的帖子"
+        summary = f"[HN Radar] Found {len(payload)} noteworthy posts"
         msg = build_initial_message(summary, payload)
         log.consultation("request_sent", mode="batch", item_count=len(payload),
                          titles=[p.get("title", "")[:80] for p in payload])
@@ -217,14 +217,14 @@ def update_status_md(config: TentacleConfig, state: StateDB):
     last_report = state.get_state("last_report_at", "never")
     content = f"""# HN Radar Status
 
-- **状态：** running
-- **已处理项目：** {processed}
-- **总汇报次数：** {total_reports}
-- **上次汇报：** {last_report}
-- **关注主题：** {os.environ.get('HN_TOPICS', 'AI,LLM,agent,startup')}
-- **数据源：** {os.environ.get('HN_FEEDS', 'newest')}
-- **LLM 过滤：** {os.environ.get('USE_LLM_FILTER', 'true')}
-- **更新时间：** {datetime.now(timezone.utc).isoformat()}
+- **Status:** running
+- **Processed items:** {processed}
+- **Total reports:** {total_reports}
+- **Last report:** {last_report}
+- **Watched topics:** {os.environ.get('HN_TOPICS', 'AI,LLM,agent,startup')}
+- **Data sources:** {os.environ.get('HN_FEEDS', 'newest')}
+- **LLM filter:** {os.environ.get('USE_LLM_FILTER', 'true')}
+- **Updated at:** {datetime.now(timezone.utc).isoformat()}
 """
     try:
         (Path(workspace) / "STATUS.md").write_text(content, encoding="utf-8")
@@ -244,7 +244,7 @@ def setup_workspace(config: TentacleConfig):
         content = content.replace("{HN_TOPICS}", os.environ.get("HN_TOPICS", "AI,LLM,agent,startup"))
         content = content.replace("{LLM_FILTER_CRITERIA}",
                                   os.environ.get("LLM_FILTER_CRITERIA",
-                                                 "筛选具有工程价值的内容。"))
+                                                 "Filter for content with engineering value."))
         system_dst.write_text(content, encoding="utf-8")
 
     # Copy CONSULTATION.md (tentacle-specific identity for Layer 3)
@@ -311,7 +311,7 @@ def main():
         has_question = "？" in message or "?" in message
         if not has_question and len(message) > 500:
             log.consultation("answer_sent", consultation_id=consultation_id, answer_length=18)
-            ipc.consultation_message(consultation_id, "已收到反馈。等待下次汇报。")
+            ipc.consultation_message(consultation_id, "Feedback received. Waiting for next report.")
             return
         # Layer 3: Answer Brain's follow-up using AgentLoop
         items_summary = "\n".join(f"- {i.get('title', '')}: {i.get('reason', '')}" for i in items[:5])
@@ -335,10 +335,10 @@ def main():
                 answer = response.content or "No additional details available."
         except Exception as e:
             log.error("consultation_answer_failed", error=str(e))
-            answer = f"查询信息时出错：{str(e)[:200]}"
+            answer = f"Error querying information:{str(e)[:200]}"
         # BUG4 fix: empty reply fallback — guide Brain back to push decision
         if not answer or len(answer.strip()) < 10:
-            answer = "无法获取更多详情。请根据汇报中的现有信息决定是否推送给用户。"
+            answer = "Unable to retrieve more details. Please decide whether to push to the user based on the existing information in the report."
         log.consultation("answer_sent", consultation_id=consultation_id,
                          answer_length=len(answer))
         ipc.consultation_message(consultation_id, answer)

@@ -13,8 +13,8 @@ export function createSessionTools(agentId: string): ToolRegistryEntry[] {
   const sessionsList: ToolDefinition = {
     name: "sessions_list",
     label: "Sessions List",
-    description: "列出最近活跃的 session",
-    promptSnippet: "sessions_list — 列出最近活跃的 session",
+    description: "List recently active sessions",
+    promptSnippet: "sessions_list — list recently active sessions",
     parameters: Type.Object({
       active_within_minutes: Type.Optional(Type.Number({ default: 1440 })),
       limit: Type.Optional(Type.Number({ default: 20 })),
@@ -42,10 +42,10 @@ export function createSessionTools(agentId: string): ToolRegistryEntry[] {
   const sessionsHistory: ToolDefinition = {
     name: "sessions_history",
     label: "Sessions History",
-    description: "查看指定 session 的最近历史消息",
-    promptSnippet: "sessions_history — 查看指定 session 的最近消息",
+    description: "View recent message history for a specified session",
+    promptSnippet: "sessions_history — view recent messages for a specified session",
     parameters: Type.Object({
-      session_key: Type.String({ description: "session key，如 agent:ceph:main" }),
+      session_key: Type.String({ description: "Session key, e.g. agent:ceph:main" }),
       limit: Type.Optional(Type.Number({ default: 20 })),
       include_tools: Type.Optional(Type.Boolean({ default: false })),
     }),

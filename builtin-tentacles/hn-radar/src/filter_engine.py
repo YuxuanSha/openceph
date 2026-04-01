@@ -171,9 +171,9 @@ def to_consultation_items(items: list[dict]) -> list[dict]:
             "title": item.get("title", ""),
             "content": (
                 f"📰 {item.get('title', '')}\n"
-                f"{item.get('score', 0)}分 · {item.get('comments', 0)}条评论\n"
-                f"链接：{item.get('url', '')}\n"
-                f"HN 讨论：{item.get('comments_url', '')}"
+                f"{item.get('score', 0)} points · {item.get('comments', 0)} comments\n"
+                f"Link: {item.get('url', '')}\n"
+                f"HN discussion: {item.get('comments_url', '')}"
             ),
             "score": safe_int(item.get("score")),
             "importance": item.get("llm_importance", "medium"),

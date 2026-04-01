@@ -1,43 +1,43 @@
-# LLM Gateway API 完整参考
+# LLM Gateway API Complete Reference
 
-**文件位置：** `contracts/skill-tentacle-spec/reference/llm-gateway-api.md`  
-**用途：** 触手调用 LLM 的 HTTP API 完整规范
-
----
-
-## 1. 概述
-
-LLM Gateway 是 Brain 主进程内启动的本地 HTTP 服务，向所有触手提供统一的模型调用能力。兼容 OpenAI API 格式。
-
-触手**不直接调用外部 LLM API**，所有模型调用必须通过 LLM Gateway。
+**File location:** `contracts/skill-tentacle-spec/reference/llm-gateway-api.md`
+**Purpose:** Complete specification of the HTTP API for tentacles to call LLMs
 
 ---
 
-## 2. 连接信息
+## 1. Overview
+
+LLM Gateway is a local HTTP service started within the Brain main process, providing unified model invocation capabilities to all tentacles. It is compatible with the OpenAI API format.
+
+Tentacles **do not call external LLM APIs directly**; all model calls must go through the LLM Gateway.
+
+---
+
+## 2. Connection Information
 
 ```
-URL:   环境变量 OPENCEPH_LLM_GATEWAY_URL   （如 http://127.0.0.1:18792）
-Token: 环境变量 OPENCEPH_LLM_GATEWAY_TOKEN
-ID:    环境变量 OPENCEPH_TENTACLE_ID
+URL:   Environment variable OPENCEPH_LLM_GATEWAY_URL   (e.g., http://127.0.0.1:18792)
+Token: Environment variable OPENCEPH_LLM_GATEWAY_TOKEN
+ID:    Environment variable OPENCEPH_TENTACLE_ID
 ```
 
-这三个环境变量在触手启动时由 Brain 自动注入 `.env`，触手代码通过 `os.environ` 读取。
+These three environment variables are automatically injected into `.env` by Brain when the tentacle starts. Tentacle code reads them via `os.environ`.
 
 ---
 
-## 3. 端点列表
+## 3. Endpoint List
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/v1/chat/completions` | Chat Completions（核心端点） |
-| GET | `/v1/models` | 列出可用模型 |
-| GET | `/health` | 健康检查 |
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/chat/completions` | Chat Completions (core endpoint) |
+| GET | `/v1/models` | List available models |
+| GET | `/health` | Health check |
 
 ---
 
 ## 4. Chat Completions
 
-### 请求
+### Request
 
 ```
 POST {OPENCEPH_LLM_GATEWAY_URL}/v1/chat/completions
@@ -46,16 +46,16 @@ Headers:
   Content-Type: application/json
   Authorization: Bearer {OPENCEPH_LLM_GATEWAY_TOKEN}
   X-Tentacle-Id: {OPENCEPH_TENTACLE_ID}
-  X-Request-Id: {可选，UUID，用于日志关联}
+  X-Request-Id: {Optional, UUID, used for log correlation}
 ```
 
-### 请求体
+### Request Body
 
 ```json
 {
   "messages": [
-    { "role": "system", "content": "你是论文分析专家..." },
-    { "role": "user", "content": "分析这篇论文的方法论..." }
+    { "role": "system", "content": "You are a paper analysis expert..." },
+    { "role": "user", "content": "Analyze the methodology of this paper..." }
   ],
   "model": "default",
   "temperature": 0.3,
@@ -66,7 +66,7 @@ Headers:
       "type": "function",
       "function": {
         "name": "search_arxiv",
-        "description": "搜索 arXiv 论文",
+        "description": "Search arXiv papers",
         "parameters": {
           "type": "object",
           "properties": {
@@ -80,27 +80,27 @@ Headers:
 }
 ```
 
-| 字段 | 必须 | 类型 | 说明 |
-|------|------|------|------|
-| `messages` | ✅ | array | 消息列表 |
-| `model` | ❌ | string | 模型选择（见下表），默认 `"default"` |
-| `temperature` | ❌ | number | 0.0-2.0，默认使用配置值 |
-| `max_tokens` | ❌ | number | 最大输出 token |
-| `stream` | ❌ | boolean | 是否流式输出，默认 `false` |
-| `tools` | ❌ | array | 工具定义列表（OpenAI function calling 格式） |
-| `tool_choice` | ❌ | string/object | `"auto"` / `"none"` / 指定工具 |
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `messages` | Yes | array | Message list |
+| `model` | No | string | Model selection (see table below), defaults to `"default"` |
+| `temperature` | No | number | 0.0-2.0, defaults to configured value |
+| `max_tokens` | No | number | Maximum output tokens |
+| `stream` | No | boolean | Whether to enable streaming output, defaults to `false` |
+| `tools` | No | array | Tool definition list (OpenAI function calling format) |
+| `tool_choice` | No | string/object | `"auto"` / `"none"` / specific tool |
 
-### model 字段解析
+### model Field Resolution
 
-| 值 | 行为 |
-|----|------|
-| `"default"` 或省略 | 使用 openceph.json 中 `tentacle.model.primary` |
-| `"fallback"` | 使用 `tentacle.model.fallbacks[0]` |
-| 具体 ID（如 `"openrouter/google/gemini-3-flash-preview"`） | 使用指定模型 |
+| Value | Behavior |
+|-------|----------|
+| `"default"` or omitted | Uses `tentacle.model.primary` from openceph.json |
+| `"fallback"` | Uses `tentacle.model.fallbacks[0]` |
+| Specific ID (e.g., `"openrouter/google/gemini-3-flash-preview"`) | Uses the specified model |
 
-**建议：** 始终使用 `"default"` 或省略，让配置文件决定模型选择。
+**Recommendation:** Always use `"default"` or omit the field, and let the configuration file determine model selection.
 
-### 响应体（非流式）
+### Response Body (Non-Streaming)
 
 ```json
 {
@@ -113,7 +113,7 @@ Headers:
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "这篇论文提出了...",
+        "content": "This paper proposes...",
         "tool_calls": null
       },
       "finish_reason": "stop"
@@ -127,7 +127,7 @@ Headers:
 }
 ```
 
-### 带 tool_calls 的响应
+### Response with tool_calls
 
 ```json
 {
@@ -154,9 +154,9 @@ Headers:
 }
 ```
 
-当 `finish_reason` 为 `"tool_calls"` 时，触手应执行对应工具，然后将结果作为 `tool` role 消息追加到 messages 中继续调用。
+When `finish_reason` is `"tool_calls"`, the tentacle should execute the corresponding tool, then append the result as a `tool` role message to the messages and continue calling.
 
-### tool_result 消息格式（追加到 messages）
+### tool_result Message Format (appended to messages)
 
 ```json
 {
@@ -168,30 +168,30 @@ Headers:
 
 ---
 
-## 5. Streaming（SSE）
+## 5. Streaming (SSE)
 
 ```
 POST {OPENCEPH_LLM_GATEWAY_URL}/v1/chat/completions
 Body: { ..., "stream": true }
 ```
 
-响应为 Server-Sent Events：
+The response is Server-Sent Events:
 
 ```
 data: {"id":"chatcmpl-xxx","choices":[{"delta":{"role":"assistant"},"index":0}]}
 
-data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":"这篇"},"index":0}]}
+data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":"This"},"index":0}]}
 
-data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":"论文"},"index":0}]}
+data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":" paper"},"index":0}]}
 
-data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":"提出了"},"index":0}]}
+data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":" proposes"},"index":0}]}
 
 data: [DONE]
 ```
 
 ---
 
-## 6. 模型列表
+## 6. Model List
 
 ```
 GET {OPENCEPH_LLM_GATEWAY_URL}/v1/models
@@ -213,7 +213,7 @@ GET {OPENCEPH_LLM_GATEWAY_URL}/v1/models
 
 ---
 
-## 7. 健康检查
+## 7. Health Check
 
 ```
 GET {OPENCEPH_LLM_GATEWAY_URL}/health
@@ -229,7 +229,7 @@ GET {OPENCEPH_LLM_GATEWAY_URL}/health
 
 ---
 
-## 8. 错误响应
+## 8. Error Responses
 
 ```json
 {
@@ -241,34 +241,34 @@ GET {OPENCEPH_LLM_GATEWAY_URL}/health
 }
 ```
 
-| HTTP 状态码 | 原因 |
-|------------|------|
-| 400 | 请求格式错误 |
-| 401 | Token 无效 |
-| 403 | 触手未注册或已停止 |
-| 429 | 速率限制 |
-| 500 | Gateway 内部错误 |
-| 502 | 上游 LLM provider 不可用 |
+| HTTP Status Code | Reason |
+|-----------------|--------|
+| 400 | Malformed request |
+| 401 | Invalid token |
+| 403 | Tentacle not registered or already stopped |
+| 429 | Rate limit |
+| 500 | Gateway internal error |
+| 502 | Upstream LLM provider unavailable |
 
 ---
 
-## 9. Python 调用示例
+## 9. Python Call Examples
 
-### 使用 openceph-runtime（推荐）
+### Using openceph-runtime (Recommended)
 
 ```python
 from openceph_runtime import LlmClient
 
 llm = LlmClient()
 response = llm.chat([
-    {"role": "system", "content": "你是论文分析专家"},
-    {"role": "user", "content": "分析这篇论文..."},
+    {"role": "system", "content": "You are a paper analysis expert"},
+    {"role": "user", "content": "Analyze this paper..."},
 ], temperature=0.3)
 
 print(response.content)
 ```
 
-### 使用 requests（底层）
+### Using requests (Low-Level)
 
 ```python
 import os, requests
@@ -280,7 +280,7 @@ resp = requests.post(
         "X-Tentacle-Id": os.environ["OPENCEPH_TENTACLE_ID"],
     },
     json={
-        "messages": [{"role": "user", "content": "分析..."}],
+        "messages": [{"role": "user", "content": "Analyze..."}],
         "temperature": 0.3,
     },
     timeout=120,
@@ -289,7 +289,7 @@ data = resp.json()
 print(data["choices"][0]["message"]["content"])
 ```
 
-### 使用 OpenAI Python SDK
+### Using OpenAI Python SDK
 
 ```python
 from openai import OpenAI
@@ -303,7 +303,7 @@ client = OpenAI(
 
 response = client.chat.completions.create(
     model="default",
-    messages=[{"role": "user", "content": "分析..."}],
+    messages=[{"role": "user", "content": "Analyze..."}],
 )
 print(response.choices[0].message.content)
 ```

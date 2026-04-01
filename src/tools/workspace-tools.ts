@@ -2,10 +2,10 @@ import { createReadOnlyTools } from "@mariozechner/pi-coding-agent"
 import type { ToolRegistryEntry } from "./index.js"
 
 const WORKSPACE_TOOL_DESCRIPTIONS: Record<string, string> = {
-  read: "读取 workspace 文件内容；适用于 SOUL.md、AGENTS.md、USER.md、HEARTBEAT.md、memory/*.md 等",
-  grep: "在 workspace 内按关键词搜索文件内容，返回文件路径与行号",
-  find: "在 workspace 内按 glob 查找文件路径",
-  ls: "列出 workspace 目录内容",
+  read: "Read workspace file contents; suitable for SOUL.md, AGENTS.md, USER.md, HEARTBEAT.md, memory/*.md, etc.",
+  grep: "Search file contents by keyword within the workspace, returning file paths and line numbers",
+  find: "Find file paths within the workspace by glob pattern",
+  ls: "List workspace directory contents",
 }
 
 export function createWorkspaceTools(workspaceDir: string): ToolRegistryEntry[] {

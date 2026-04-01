@@ -339,12 +339,12 @@ export class ConsultationSessionManager {
           consultation_id: consultation.consultationId,
           error: err instanceof Error ? err.message : String(err),
         })
-        brainContent = "处理汇报时出现错误，请稍后重试。"
+        brainContent = "An error occurred while processing the report. Please try again later."
         shouldContinue = false
       }
     } else {
       // Fallback: auto-acknowledge without LLM
-      brainContent = "收到汇报，已记录。"
+      brainContent = "Report received and recorded."
       shouldContinue = false
     }
 
@@ -364,27 +364,27 @@ export class ConsultationSessionManager {
     } else if (hasPushedSomething) {
       // Brain already pushed content — default to done unless explicit follow-up
       const hasFollowUpSignal = (
-        brainContent.includes("帮我看看") ||
-        brainContent.includes("帮我查") ||
-        brainContent.includes("补充一下")
+        brainContent.includes("help me check") ||
+        brainContent.includes("look into") ||
+        brainContent.includes("add more details")
       )
       shouldContinue = hasFollowUpSignal
     } else {
       // No pushes yet — check if Brain is asking tentacle for more info
       const hasFollowUpSignal = (
-        brainContent.includes("帮我看看") ||
-        brainContent.includes("帮我查") ||
-        brainContent.includes("能不能") ||
-        brainContent.includes("详细说") ||
-        brainContent.includes("补充一下") ||
-        brainContent.includes("具体")
+        brainContent.includes("help me check") ||
+        brainContent.includes("look into") ||
+        brainContent.includes("could you") ||
+        brainContent.includes("elaborate") ||
+        brainContent.includes("add more details") ||
+        brainContent.includes("specifics")
       )
       const hasEndSignal = (
-        brainContent.includes("不推") ||
-        brainContent.includes("汇报结束") ||
-        brainContent.includes("处理完毕") ||
-        brainContent.includes("结束对话") ||
-        brainContent.includes("无推送") ||
+        brainContent.includes("no push") ||
+        brainContent.includes("report complete") ||
+        brainContent.includes("processing done") ||
+        brainContent.includes("end conversation") ||
+        brainContent.includes("nothing to push") ||
         brainContent.includes("continue: false")
       )
 
@@ -403,7 +403,7 @@ export class ConsultationSessionManager {
     if (!shouldContinue && actionsTaken.length === 0 && consultation.turn === 1) {
       consultation.messages.push({
         role: "user",
-        content: "[SYSTEM MANDATORY] 你必须现在做出决策：调用 send_to_user 推送值得推送的内容，或回复「无推送」并说明原因。不接受其他形式的回复。",
+        content: "[SYSTEM MANDATORY] You must make a decision now: call send_to_user to push content worth sharing, or reply with \"no push\" and explain why. No other form of reply is accepted.",
       })
       shouldContinue = true
       brainLogger.info("consultation_retry_nudge", {
@@ -524,7 +524,7 @@ export class ConsultationSessionManager {
       try {
         memorySummary = await this.options.getMemorySummary()
       } catch {
-        memorySummary = "(无法加载用户记忆)"
+        memorySummary = "(failed to load user memory)"
       }
     }
 
@@ -533,7 +533,7 @@ export class ConsultationSessionManager {
       try {
         userPreferences = await this.options.getUserPreferences()
       } catch {
-        userPreferences = "(无法加载用户偏好)"
+        userPreferences = "(failed to load user preferences)"
       }
     }
 
@@ -541,8 +541,8 @@ export class ConsultationSessionManager {
       tentacleId,
       tentacleDisplayName: status?.purpose ?? tentacleId,
       tentacleEmoji: "🐙",
-      tentaclePurpose: status?.purpose ?? "未知",
-      tentacleLastActive: status?.lastReportAt ?? status?.updatedAt ?? "未知",
+      tentaclePurpose: status?.purpose ?? "unknown",
+      tentacleLastActive: status?.lastReportAt ?? status?.updatedAt ?? "unknown",
       memorySummary,
       userPreferences,
     }
@@ -560,20 +560,20 @@ export class ConsultationSessionManager {
     // Load the consultation template (CONSULTATION.md) which has placeholders
     const template = await this.loadTemplate()
     const filled = template
-      .replace("{USER_NAME}", "用户")
+      .replace("{USER_NAME}", "User")
       .replace("{TENTACLE_DISPLAY_NAME}", context.tentacleDisplayName)
       .replace("{TENTACLE_EMOJI}", context.tentacleEmoji)
       .replace("{TENTACLE_PURPOSE}", context.tentaclePurpose)
       .replace("{TENTACLE_LAST_ACTIVE}", context.tentacleLastActive)
-      .replace("{MEMORY_SUMMARY}", context.memorySummary || "(尚无记忆)")
-      .replace("{USER_PREFERENCES}", context.userPreferences || "(尚无偏好设置)")
+      .replace("{MEMORY_SUMMARY}", context.memorySummary || "(no memory yet)")
+      .replace("{USER_PREFERENCES}", context.userPreferences || "(no preferences set)")
 
     // Assemble: consultation template + identity files + reminder
     const parts = [filled]
     for (const f of identityFiles) {
       parts.push(`# [Identity] ${f.name}\n${f.content}`)
     }
-    const reminder = "# REMINDER: 你必须用 send_to_user 工具推送内容给用户。只写文字分析不算推送——用户看不到你的文字回复。"
+    const reminder = "# REMINDER: You MUST use the send_to_user tool to push content to the user. Writing text analysis alone is not a push — the user cannot see your text replies."
     parts.push(reminder)
     return parts.join("\n\n---\n\n")
   }
@@ -603,46 +603,46 @@ export class ConsultationSessionManager {
 
 // ─── Default Template ───────────────────────────────────────────
 
-const DEFAULT_CONSULTATION_TEMPLATE = `# Consultation Session — 你在与下属员工对话
+const DEFAULT_CONSULTATION_TEMPLATE = `# Consultation Session — You are speaking with a subordinate staff member
 
-## 你的角色
-你是 Ceph，{USER_NAME} 的首席 LeaderStaff。你正在听取一位下属员工的工作汇报。
+## Your Role
+You are Ceph, {USER_NAME}'s chief LeaderStaff. You are receiving a work report from a subordinate staff member.
 
-## 当前对话对象
-触手：{TENTACLE_DISPLAY_NAME}（{TENTACLE_EMOJI}）
-职责：{TENTACLE_PURPOSE}
-最近活跃：{TENTACLE_LAST_ACTIVE}
+## Current Conversation Partner
+Tentacle: {TENTACLE_DISPLAY_NAME} ({TENTACLE_EMOJI})
+Responsibility: {TENTACLE_PURPOSE}
+Last Active: {TENTACLE_LAST_ACTIVE}
 
-## 用户记忆（你对老板的了解）
+## User Memory (what you know about your boss)
 {MEMORY_SUMMARY}
 
-## 用户偏好（推送决策参考）
+## User Preferences (reference for push decisions)
 {USER_PREFERENCES}
 
-## 你的职责
-1. **理解汇报内容**：认真阅读触手的汇报，理解每条信息的价值
-2. **追问细节**：如果信息不够充分，向触手追问（触手有 Agent 能力可以实时查询）
-3. **推送决策**：判断哪些信息值得推送给用户。触手已做过初筛，默认倾向是推送。
-   - 和用户当前工作/兴趣直接相关 → 推送
-   - 高分、多评论、有工程价值 → 推送
-   - 和用户完全无关 → 不推送，告知触手
-   - 不确定 → 追问触手要更多信息后再决定
-4. **推送后反馈**：告诉触手哪些已推送、哪些未推送及原因
-5. **质量反馈**：告诉触手未来筛选标准的调整建议
+## Your Responsibilities
+1. **Understand the report**: Read the tentacle's report carefully and understand the value of each piece of information
+2. **Ask for details**: If information is insufficient, ask the tentacle for more (tentacles have Agent capabilities and can query in real time)
+3. **Push decisions**: Determine which information is worth pushing to the user. The tentacle has already done initial filtering; the default tendency is to push.
+   - Directly related to the user's current work/interests → push
+   - High score, many comments, engineering value → push
+   - Completely unrelated to the user → do not push, inform the tentacle
+   - Uncertain → ask the tentacle for more information before deciding
+4. **Post-push feedback**: Tell the tentacle what was pushed, what was not, and why
+5. **Quality feedback**: Give the tentacle suggestions for adjusting future filtering criteria
 
-## 对话轮次
-这是一个多轮对话，上限 20 轮。你回复后，触手会收到消息并可以回复你。
-- 追问了问题 → continue: true，等触手回答
-- 处理完所有内容 → continue: false，对话结束
+## Conversation Turns
+This is a multi-turn conversation with a maximum of 20 turns. After you reply, the tentacle will receive your message and can respond.
+- Asked a follow-up question → continue: true, wait for tentacle's answer
+- Finished processing all content → continue: false, conversation ends
 
-## 推送格式
-调用 send_to_user 时，消息应该用你（Ceph）的口吻，不要暴露触手的存在：
-- ✅ "发现一篇值得关注的论文：..."
-- ❌ "我的触手 t_arxiv_scout 发现了一篇论文..."
+## Push Format
+When calling send_to_user, the message should be in your (Ceph's) voice — do not expose the tentacle's existence:
+- ✅ "Found a paper worth reading: ..."
+- ❌ "My tentacle t_arxiv_scout found a paper..."
 
-## 约束
-- 在这个 session 中你不是在和用户对话，是在和下属对话
-- 不要使用和用户对话时的语气（不需要"你好"式开场）
-- 直接、高效、决策导向
-- 推送给用户的消息要精炼，不要把触手的原始数据全部转发
+## Constraints
+- In this session you are not talking to the user, you are talking to a subordinate
+- Do not use the tone you use when talking to the user (no "Hello" style openers)
+- Direct, efficient, decision-oriented
+- Keep messages pushed to the user concise — do not forward all of the tentacle's raw data
 `

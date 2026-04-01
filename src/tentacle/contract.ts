@@ -4,8 +4,8 @@
  * Defines all message types and payloads for tentacle ↔ Brain IPC.
  * Uses JSON-line format (one JSON object per line).
  *
- * NOTE: This file contains BOTH legacy M3 types (for backward compatibility
- * with existing IPC infrastructure) AND new protocol types (for the
+ * NOTE: This file contains BOTH classic IPC types (for backward compatibility
+ * with existing infrastructure) AND newer protocol types (for the
  * skill-tentacle protocol spec).
  */
 
@@ -55,7 +55,7 @@ export function createIpcMessage(
 
 // ─── Shared Enums ───────────────────────────────────────────────
 
-/** Legacy M3 mode values. */
+/** Classic consultation mode values (kept for backward compatibility). */
 export type LegacyConsultationMode = "single" | "batch" | "action_confirm"
 
 /** New protocol mode values. */
@@ -124,7 +124,7 @@ export interface HeartbeatResultPayload {
   }>
 }
 
-// ─── M3: Consultation batch mode types (legacy) ──────────────────
+// ─── Consultation batch mode types ────────────────────────────────
 
 export interface ConsultationItem {
   id: string
@@ -222,7 +222,7 @@ export interface ToolResultPayload {
   error?: string
 }
 
-// ─── M3: Tentacle capability types ────────────────────────────────
+// ─── Tentacle capability types ───────────────────────────────────
 
 export type TentacleCapability =
   | "web_search"

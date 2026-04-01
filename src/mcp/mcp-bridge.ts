@@ -17,7 +17,7 @@ interface McpServerProcess {
 
 /**
  * MCP Bridge: manages MCP server processes and exposes their tools.
- * M1: basic stdio transport for command-type servers.
+ * Currently supports stdio transport for command-type servers.
  */
 export class McpBridge {
   private servers: Map<string, McpServerProcess> = new Map()
@@ -47,7 +47,7 @@ export class McpBridge {
           this.servers.set(name, server)
           await this.startCommandServer(server)
         } else if (serverCfg.type === "sse") {
-          // SSE transport — M1 stub
+          // SSE transport — not yet implemented
           systemLogger.info("mcp_sse_skipped", { server: name, url: serverCfg.url })
         }
       } catch (err: any) {

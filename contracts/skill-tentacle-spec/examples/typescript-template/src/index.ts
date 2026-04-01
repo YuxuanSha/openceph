@@ -1,17 +1,17 @@
 /**
- * Template Monitor — OpenCeph skill_tentacle TypeScript 模板
+ * Template Monitor — OpenCeph skill_tentacle TypeScript template
  *
- * 三层架构：
- *   第一层 — 工程 Daemon（while 循环，纯代码）
- *   第二层 — Agent 能力（按策略激活 LLM）
- *   第三层 — Consultation（与 Brain 多轮对话）
+ * Three-layer architecture:
+ *   Layer 1 — Engineering Daemon (while loop, pure code)
+ *   Layer 2 — Agent Capabilities (activate LLM on demand)
+ *   Layer 3 — Consultation (multi-turn conversation with Brain)
  */
 
 import { IpcClient, LlmClient, AgentLoop, TentacleLogger, TentacleConfig, StateDB, loadTools } from "@openceph/runtime"
 import * as fs from "fs"
 import * as path from "path"
 
-// ━━━ 配置 ━━━
+// --- Configuration ---
 const config = new TentacleConfig()
 const log = new TentacleLogger()
 const ipc = new IpcClient()
@@ -21,7 +21,7 @@ const TOPICS = (config.get("MONITOR_TOPICS") || "AI,LLM").split(",").map(t => t.
 const BATCH_THRESHOLD = config.batchThreshold
 const POLL_INTERVAL = parseInt(config.get("POLL_INTERVAL_SECONDS") || "21600", 10) * 1000
 
-// ━━━ 全局状态 ━━━
+// --- Global State ---
 let shutdown = false
 let paused = false
 const pending: any[] = []
@@ -29,7 +29,7 @@ const pending: any[] = []
 process.on("SIGTERM", () => { shutdown = true })
 process.on("SIGINT", () => { shutdown = true })
 
-// ━━━ IPC Handlers ━━━
+// --- IPC Handlers ---
 ipc.onDirective((action: string, params: Record<string, any>) => {
   log.daemon("directive_received", { action })
   if (action === "pause") paused = true
@@ -45,7 +45,7 @@ ipc.onConsultationReply((consultationId, message, actionsTaken, shouldContinue) 
   }
   if (!shouldContinue) return
 
-  // Brain 追问，回答
+  // Brain asked a follow-up question; answer it
   const answer = answerBrainQuestion(message)
   ipc.consultationMessage(consultationId, answer)
 })
@@ -56,12 +56,12 @@ ipc.onConsultationClose((consultationId, summary, pushedCount, discardedCount, f
   if (feedback) db.setState("last_brain_feedback", feedback)
 })
 
-// ━━━ 第一层：工程逻辑（替换这些函数）━━━
+// --- Layer 1: Engineering Logic (replace these functions) ---
 
 async function fetchNewData(): Promise<any[]> {
   log.daemon("fetch_start", { source: "template", topics: TOPICS })
   const items: any[] = []
-  // TODO: 实现数据抓取
+  // TODO: Implement data fetching
   log.daemon("fetch_end", { items: items.length })
   return items
 }
@@ -70,7 +70,7 @@ function ruleFilter(items: any[]): any[] {
   const filtered = items.filter(item => {
     if (db.isProcessed(item.id)) return false
     db.markProcessed(item.id)
-    // TODO: 实现过滤规则
+    // TODO: Implement filtering rules
     return true
   })
   log.daemon("rule_filter", { input: items.length, output: filtered.length })
@@ -78,11 +78,11 @@ function ruleFilter(items: any[]): any[] {
 }
 
 function executeMyTool(toolName: string, args: Record<string, any>): string {
-  // TODO: 实现自建工具
+  // TODO: Implement custom tools
   return JSON.stringify({ error: `Not implemented: ${toolName}` })
 }
 
-// ━━━ 第二层：Agent 逻辑 ━━━
+// --- Layer 2: Agent Logic ---
 
 async function activateAgent(pendingItems: any[]): Promise<any[]> {
   log.agent("activated", { pendingCount: pendingItems.length })
@@ -110,16 +110,16 @@ async function answerBrainQuestion(question: string): Promise<string> {
   const systemPrompt = fs.readFileSync(path.join(config.workspace, "SYSTEM.md"), "utf-8")
   const response = await llm.chat([
     { role: "system", content: systemPrompt },
-    { role: "user", content: `Brain 追问：${question}` },
+    { role: "user", content: `Brain follow-up question: ${question}` },
   ])
   return response.content
 }
 
-// ━━━ 辅助函数 ━━━
+// --- Helper Functions ---
 
 function formatItemsForAgent(items: any[]): string {
-  return `以下是 ${items.length} 条待分析的内容：\n\n` +
-    items.map((item, i) => `${i + 1}. ${item.title || "未知"}\n   ${item.summary || ""}`).join("\n\n")
+  return `The following ${items.length} items are pending analysis:\n\n` +
+    items.map((item, i) => `${i + 1}. ${item.title || "Unknown"}\n   ${item.summary || ""}`).join("\n\n")
 }
 
 function parseAgentResult(result: string): any[] {
@@ -128,10 +128,10 @@ function parseAgentResult(result: string): any[] {
 
 function updateStatusMd(): void {
   const statusPath = path.join(config.workspace, "STATUS.md")
-  fs.writeFileSync(statusPath, `# 运行状态\n\n- 状态：正常\n- 扫描总数：${db.getStat("total_scanned")}\n`)
+  fs.writeFileSync(statusPath, `# Runtime Status\n\n- Status: Normal\n- Total scanned: ${db.getStat("total_scanned")}\n`)
 }
 
-// ━━━ 主循环 ━━━
+// --- Main Loop ---
 
 async function main() {
   ipc.connect()
@@ -157,7 +157,7 @@ async function main() {
         if (consultationItems.length > 0) {
           ipc.consultationRequest({
             mode: "batch",
-            summary: `发现 ${consultationItems.length} 条值得关注的内容`,
+            summary: `Found ${consultationItems.length} noteworthy items`,
             initialMessage: formatConsultationReport(consultationItems),
             context: { totalScanned: db.getStat("total_scanned") },
           })
@@ -178,7 +178,7 @@ async function main() {
 }
 
 function formatConsultationReport(items: any[]): string {
-  return `筛选出 ${items.length} 条内容：\n\n` +
+  return `Filtered out ${items.length} items:\n\n` +
     items.map((item, i) => `${i + 1}. ${item.content?.substring(0, 200) || ""}`).join("\n\n")
 }
 
@@ -186,7 +186,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-// ━━━ 入口 ━━━
+// --- Entry Point ---
 
 if (process.argv.includes("--dry-run")) {
   console.log(`✓ Tentacle ID: ${process.env.OPENCEPH_TENTACLE_ID}`)

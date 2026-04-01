@@ -275,7 +275,7 @@ export class Brain {
           sessionKey: `consultation:${consultationId}`,
           mode: "minimal",
           message: messages.map(m => {
-            const label = m.role === "user" ? `触手:${tentacleId}` : "brain_response"
+            const label = m.role === "user" ? `tentacle:${tentacleId}` : "brain_response"
             return `[${label}]: ${m.content}`
           }).join("\n\n"),
           systemPromptOverride: systemPrompt,
@@ -456,7 +456,7 @@ export class Brain {
     try {
       templateContent = await fs.readFile(toolsMdPath, "utf-8")
       // Strip any previously appended auto-generated section for clean re-sync
-      const autoGenMarker = "\n\n## 其他已注册工具\n"
+      const autoGenMarker = "\n\n## Other Registered Tools\n"
       const markerIdx = templateContent.indexOf(autoGenMarker)
       if (markerIdx !== -1) {
         templateContent = templateContent.slice(0, markerIdx)
@@ -485,10 +485,10 @@ export class Brain {
     // If template exists but some tools are missing, append them
     if (templateContent && unmentionedTools.length > 0) {
       const groupLabels: Record<string, string> = {
-        user: "核心工具", messaging: "消息工具", memory: "记忆工具",
-        web: "网页工具", sessions: "会话工具", skill: "技能工具",
-        heartbeat: "Heartbeat 工具", tentacle: "触手工具",
-        code: "代码工具", mcp: "MCP 工具",
+        user: "Core Tools", messaging: "Messaging Tools", memory: "Memory Tools",
+        web: "Web Tools", sessions: "Session Tools", skill: "Skill Tools",
+        heartbeat: "Heartbeat Tools", tentacle: "Tentacle Tools",
+        code: "Code Tools", mcp: "MCP Tools",
       }
       const grouped = new Map<string, typeof unmentionedTools>()
       for (const t of unmentionedTools) {
@@ -496,7 +496,7 @@ export class Brain {
         list.push(t)
         grouped.set(t.group, list)
       }
-      let appendix = "\n\n## 其他已注册工具\n"
+      let appendix = "\n\n## Other Registered Tools\n"
       for (const [group, tools] of grouped) {
         appendix += `\n### ${groupLabels[group] || group}\n`
         for (const t of tools) {
@@ -515,29 +515,29 @@ export class Brain {
       groups.set(entry.group, list)
     }
     const groupLabels: Record<string, string> = {
-      user: "核心工具", messaging: "消息工具", memory: "记忆工具",
-      web: "网页工具", sessions: "会话工具", skill: "技能工具",
-      heartbeat: "Heartbeat 工具", tentacle: "触手工具",
-      code: "代码工具", mcp: "MCP 工具",
+      user: "Core Tools", messaging: "Messaging Tools", memory: "Memory Tools",
+      web: "Web Tools", sessions: "Session Tools", skill: "Skill Tools",
+      heartbeat: "Heartbeat Tools", tentacle: "Tentacle Tools",
+      code: "Code Tools", mcp: "MCP Tools",
     }
-    let md = "# TOOLS.md — 工具使用指南\n"
+    let md = "# TOOLS.md — Tool Usage Guide\n"
     for (const [group, tools] of groups) {
       md += `\n## ${groupLabels[group] || group}\n`
       for (const t of tools) {
         md += `${t.name} — ${t.description}\n`
       }
     }
-    md += `\n## 工具使用原则\n`
-    md += `- 能直接回答的不调工具\n`
-    md += `- 当前这轮对话的正常回复，直接输出文本；不要调用 send_to_user\n`
-    md += `- send_to_user 只用于主动通知、异步提醒、非当前会话的外呼\n`
-    md += `- 用户说"搜一下""查一下""找一下""新闻"等需要实时信息时，必须调用 web_search\n`
-    md += `- 如果没有实际调用过 web_search，绝不能声称"已经搜过了"\n`
-    md += `- 搜索结果直接在回复中总结，不需要再调用 send_to_user\n`
-    md += `- web_fetch 不执行 JS，JS 重度页面需注意\n`
-    md += `- 调用 invoke_code_agent / spawn_from_skill 后，必须按 tool result 原样区分 generated、deployed、spawned、running，禁止把 deployed 说成已运行\n`
-    md += `- 只有 tool result 明确给出 spawned=true 或运行态证据时，才能说"已启动/后台运行"\n`
-    md += `- 只能引用 tool result 或状态系统返回的真实日志路径，禁止臆造 logs/ 目录\n`
+    md += `\n## Tool Usage Principles\n`
+    md += `- Do not invoke tools if the question can be answered directly\n`
+    md += `- For normal replies in the current conversation turn, output text directly; do not call send_to_user\n`
+    md += `- send_to_user is only for proactive notifications, async reminders, and out-of-session outbound calls\n`
+    md += `- When the user asks to "search", "look up", "find", or requests "news" or other real-time information, you must call web_search\n`
+    md += `- Never claim you have already searched unless you actually called web_search\n`
+    md += `- Summarize search results directly in the reply; no need to call send_to_user\n`
+    md += `- web_fetch does not execute JS; be careful with JS-heavy pages\n`
+    md += `- After calling invoke_code_agent / spawn_from_skill, you must distinguish generated, deployed, spawned, and running exactly as the tool result states; do not say "deployed" means "running"\n`
+    md += `- Only say "started" or "running in background" when the tool result explicitly returns spawned=true or evidence of a running state\n`
+    md += `- Only reference real log paths returned by tool results or the status system; never fabricate logs/ directories\n`
     await fs.writeFile(toolsMdPath, md, "utf-8")
   }
 
@@ -591,7 +591,7 @@ export class Brain {
       })
       if (pushDecision.shouldPush && pushDecision.consolidatedText) {
         // Append push content to the reply
-        output.text += `\n\n---\n📬 **触手动态：**\n${pushDecision.consolidatedText}`
+        output.text += `\n\n---\n📬 **Tentacle Updates:**\n${pushDecision.consolidatedText}`
         // Mark items as sent
         await this.outboundQueue.markSentBatch(pushDecision.items.map((i) => i.itemId))
         await this.pushEngine.recordPush()
@@ -900,7 +900,7 @@ export class Brain {
 
     const durationMs = Date.now() - startTime
     if (loopAborted && !replyText.trim()) {
-      replyText = "检测到工具调用循环，已中止。"
+      replyText = "Tool call loop detected, aborted."
     }
 
     // Empty response guard: if no text and no tool calls, return a friendly message
@@ -909,7 +909,7 @@ export class Brain {
         session_id: sessionEntry.sessionId,
         model: params.model,
       })
-      replyText = "抱歉，我刚才没有生成有效回复，请再说一次。"
+      replyText = "Sorry, I didn't generate a valid response. Please try again."
     }
 
     brainLogger.info("streaming_end", {
@@ -1199,7 +1199,7 @@ export class Brain {
       try {
         await this.sessionStore.reset(this.currentSessionKey, "manual")
         this.session = null
-        return "对话历史已重置，重要信息已保存到记忆中。"
+        return "Conversation history has been reset; important information has been saved to memory."
       } catch (resetErr: any) {
         brainLogger.error("compaction_fallback_reset_failed", { error: resetErr.message })
         return `Compaction failed: ${err.message}. Session reset also failed.`
@@ -1408,8 +1408,8 @@ export class Brain {
     if (!session || session.status !== "waiting_user") return
 
     const lowered = input.text.toLowerCase()
-    const approved = /(可以|同意|发布|发吧|approve|approved|ok|好的)/.test(lowered)
-    const rejected = /(不要|拒绝|rejected|reject|不发布|取消)/.test(lowered)
+    const approved = /(approve|approved|ok|yes|go ahead|publish|sure|yes please|go for it)/.test(lowered)
+    const rejected = /(reject|rejected|no|cancel|don't publish|cancel|dont publish|not now)/.test(lowered)
     const decision = approved ? "approved" : rejected ? "rejected" : "revise"
 
     await this.consultationStore.update(sessionId, {
@@ -1636,7 +1636,7 @@ export class Brain {
     if (items.length === 0) return
 
     const text = [
-      `☀️ 今日简报（${new Date().toISOString().slice(0, 10)}）`,
+      `☀️ Daily Digest (${new Date().toISOString().slice(0, 10)})`,
       "",
       ...items.map((item, index) => `${index + 1}. ${item.message}`),
     ].join("\n\n")
@@ -1740,9 +1740,9 @@ function normalizeThinkingLevel(level: string): ThinkingLevel {
 
 function urgencyFromText(text: string): ApprovedPushItem["priority"] {
   const lower = text.toLowerCase()
-  if (/(urgent|critical|immediate|high priority|紧急|严重|立刻)/.test(lower)) return "urgent"
-  if (/(important|action|confirm|review|审阅|确认)/.test(lower)) return "high"
-  if (/(reference|summary|digest|参考)/.test(lower)) return "low"
+  if (/(urgent|critical|immediate|high priority|asap)/.test(lower)) return "urgent"
+  if (/(important|action required|confirm|review|needs approval|blocking)/.test(lower)) return "high"
+  if (/(reference|summary|digest|for reference|low priority)/.test(lower)) return "low"
   return "normal"
 }
 

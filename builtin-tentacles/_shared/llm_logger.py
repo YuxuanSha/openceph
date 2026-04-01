@@ -1,9 +1,9 @@
 """
-LLM 请求结构化日志 — OpenCeph 触手标准组件
-所有需要调用 LLM 的 builtin skill_tentacle 直接复用此文件（由 openceph init/upgrade 自动注入）。
+LLM Request Structured Logging — OpenCeph Tentacle Standard Component
+All builtin skill_tentacles that call LLMs reuse this file directly (auto-injected by openceph init/upgrade).
 
-日志写入 <tentacle_dir>/logs/llm_sessions/<session_id>.jsonl
-每个 session 一个文件，记录完整的 messages（不截断）和 assistant 回复。
+Logs are written to <tentacle_dir>/logs/llm_sessions/<session_id>.jsonl
+One file per session, recording complete messages (no truncation) and assistant responses.
 """
 
 import json

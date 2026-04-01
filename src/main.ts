@@ -87,7 +87,7 @@ export async function startOpenCeph(): Promise<void> {
       if (gatewayRef) {
         await gatewayRef.deliverToUser(target, content)
       } else {
-        console.log(`[Ceph → ${target.recipientId ?? target.senderId}] ${content.text}`)
+        systemLogger.warn("brain_delivery_no_gateway", { recipient: target.recipientId ?? target.senderId, text: content.text })
       }
     },
   })
@@ -181,7 +181,7 @@ export async function startOpenCeph(): Promise<void> {
 
   // 9. Graceful shutdown
   const shutdown = async () => {
-    console.log("\nShutting down...")
+    systemLogger.info("shutdown_initiated")
     resetScheduler.stop()
     heartbeatScheduler.stop()
     cronScheduler.stop()

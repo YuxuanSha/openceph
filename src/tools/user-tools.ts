@@ -91,7 +91,7 @@ export async function executeSendToUser(
         priority,
         message_id: messageId,
       })
-      return ok(`已发送（immediate）`, {
+      return ok(`Sent (immediate)`, {
         delivered: true,
         source: "main_session",
         channel,
@@ -118,7 +118,7 @@ export async function executeSendToUser(
       priority,
       message_id: queuedId,
     })
-    return ok(`已加入发送队列（${params.timing}）`, {
+    return ok(`Added to send queue (${params.timing})`, {
       queued: true,
       source: "main_session",
       channel,
@@ -217,7 +217,7 @@ export async function executeSendToUser(
     })
 
     return ok(
-      `已推送到用户主 session（pushId: ${pushId}，channel: ${channel}）`,
+      `Pushed to user main session (pushId: ${pushId}, channel: ${channel})`,
       {
         delivered,
         channel,
@@ -235,7 +235,7 @@ export async function executeSendToUser(
       { channel, senderId },
       { text: params.message, timing: "immediate", priority, messageId },
     )
-    return ok("已发送", { delivered: true, channel, timing: "immediate", messageId })
+    return ok("Sent", { delivered: true, channel, timing: "immediate", messageId })
   }
 
   const queuedId = crypto.randomUUID()
@@ -248,7 +248,7 @@ export async function executeSendToUser(
     priority,
     source: "main_session",
   })
-  return ok("已加入发送队列", { queued: true, channel, timing: params.timing, messageId: queuedId })
+  return ok("Added to send queue", { queued: true, channel, timing: params.timing, messageId: queuedId })
 }
 
 export function createUserTools(opts: {
@@ -264,33 +264,22 @@ export function createUserTools(opts: {
   const sendToUser: ToolDefinition = {
     name: "send_to_user",
     label: "Send to User",
-    description: "向用户发送主动消息。系统中唯一允许触达用户的出口。",
-    promptSnippet: "send_to_user — 仅用于异步通知或主动外呼；正常对话直接回复文本，不要调用此工具",
+    description: "Send a proactive message to the user. The only permitted outbound channel to reach the user in this system.",
+    promptSnippet: "send_to_user — use only for async notifications or proactive outreach; for normal conversation just reply with text, do not call this tool",
     parameters: Type.Object({
-      message: Type.String({ description: "发送给用户的完整消息内容" }),
-      timing: Type.Union([
-        Type.Literal("immediate"),
-        Type.Literal("best_time"),
-        Type.Literal("morning_digest"),
-      ]),
-      channel: Type.Optional(Type.Union([
-        Type.Literal("telegram"),
-        Type.Literal("feishu"),
-        Type.Literal("webchat"),
-        Type.Literal("last_active"),
-      ])),
-      priority: Type.Optional(Type.Union([
-        Type.Literal("urgent"),
-        Type.Literal("high"),
-        Type.Literal("medium"),
-        Type.Literal("normal"),
-        Type.Literal("low"),
-      ])),
+      message: Type.String({ description: "The complete message content to send to the user" }),
+      timing: Type.String({ description: "immediate / best_time / morning_digest" }),
+      channel: Type.Optional(Type.String({ description: "telegram / feishu / webchat / last_active" })),
+      priority: Type.Optional(Type.String({ description: "urgent / normal / low" })),
       source_tentacles: Type.Optional(Type.Array(Type.String(), {
-        description: "推送来源的触手 ID 列表（consultation session 中使用）",
+        description: "List of tentacle IDs that are the source of this push (used in consultation sessions)",
       })),
     }),
     async execute(_id, params: SendToUserToolParams, _signal, _onUpdate, ctx) {
+      // Normalize case-insensitive enum params (Gemini sometimes sends IMMEDIATE instead of immediate)
+      if (params.timing) params.timing = params.timing.toLowerCase() as any
+      if (params.priority) params.priority = params.priority.toLowerCase() as any
+      if (params.channel) params.channel = params.channel.toLowerCase() as any
       const sessionFile = ctx.sessionManager.getSessionFile()
       const currentSessionKey = sessionFile
         ? await opts.resolveSessionKey?.(sessionFile) ?? (opts.sessionStore

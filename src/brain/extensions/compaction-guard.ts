@@ -42,7 +42,7 @@ const compactionGuard: ExtensionFactory = (pi) => {
         }
         if (typeof data.content === "string") {
           const text = data.content.toLowerCase()
-          if (text.includes("记住") || text.includes("记下来") || text.includes("remember")) {
+          if (text.includes("remember") || text.includes("note that") || text.includes("keep in mind") || text.includes("don't forget")) {
             keyPoints.push(`- User requested memory: ${data.content.slice(0, 200)}`)
           }
         }

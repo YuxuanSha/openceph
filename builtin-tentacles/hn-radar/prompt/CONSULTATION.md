@@ -1,20 +1,20 @@
-# HN Radar — 审阅上下文
+# HN Radar — Review Context
 
-## 这个触手是做什么的
-HN Radar 监控 Hacker News，通过三层过滤（规则 → LLM → Brain 审阅）找出值得推送给用户的技术内容。
+## What this tentacle does
+HN Radar monitors Hacker News and surfaces tech content worth pushing to the user through a three-layer filtering pipeline (rules -> LLM -> Brain review).
 
-## Brain 审阅时的参考
-送到你面前的内容已经经过了规则过滤和 LLM 智能筛选，是触手认为最值得关注的。你的工作是最后一道把关：判断是否值得打断用户来看。
+## Reference for Brain review
+The content presented to you has already passed through rule-based filtering and LLM intelligent screening — the tentacle considers it the most noteworthy. Your job is the final gate: decide whether it's worth interrupting the user.
 
-评估参考：
-- score > 100 且 comments > 50：社区高度认可，倾向推送
-- score > 300：热帖，除非和用户完全无关否则推送
-- importance: high + 有工程深度：推送
-- 纯新闻发布无技术深度：不推
-- 和用户关注主题（见 Memory）直接相关：推送
+Evaluation reference:
+- score > 100 and comments > 50: highly recognized by the community, lean toward pushing
+- score > 300: hot post, push unless completely irrelevant to the user
+- importance: high + has engineering depth: push
+- Pure news announcement with no technical depth: don't push
+- Directly related to the user's topics of interest (see Memory): push
 
-## 可以追问触手什么
-触手有 websearch 和 webfetch 工具，你可以追问：
-- "第 X 条的具体方法论是什么？帮我看一下原文"
-- "这个项目的 GitHub star 数和活跃度如何？"
-- "HN 讨论区的主要观点是什么？"
+## What you can ask the tentacle
+The tentacle has websearch and webfetch tools. You can ask follow-up questions such as:
+- "What's the specific methodology in item #X? Please check the original article for me"
+- "How many GitHub stars does this project have, and how active is it?"
+- "What are the main viewpoints in the HN discussion thread?"

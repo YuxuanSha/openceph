@@ -84,7 +84,7 @@ export function planConsultationDecision(
 function shouldAllowReferencePush(metadata?: TentacleConsultationMetadata): boolean {
   const combined = `${metadata?.brief ?? ""}\n${metadata?.purpose ?? ""}`.toLowerCase()
   if (!combined.trim()) return false
-  return /(直通|直接推送|direct push|directly push|例行告知|status|heartbeat|digest|摘要|汇总|每.?分钟.*告知|daily digest)/.test(combined)
+  return /(direct push|directly push|direct push|status update|heartbeat|digest|summary|recap|every .? minutes.*update|daily digest)/.test(combined)
 }
 
 function toTrackedItem(item: ConsultationTrackedItem): ConsultationTrackedItem {

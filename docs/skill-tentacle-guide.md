@@ -1,33 +1,33 @@
-# skill_tentacle 开发指南
+# skill_tentacle Development Guide
 
-## 概述
+## Overview
 
-skill_tentacle 是 OpenCeph 的标准化触手打包格式。社区开发者打包一次，所有用户直接部署。
+skill_tentacle is the standardized tentacle packaging format for OpenCeph. Community developers package once, and all users can deploy directly.
 
-## 目录结构
+## Directory Structure
 
 ```
 {tentacle-name}/
-├── SKILL.md                # 必需：Pi 兼容的 frontmatter + 触手描述
-├── README.md               # 必需：部署指南（Claude Code 读取并执行）
+├── SKILL.md                # Required: Pi-compatible frontmatter + tentacle description
+├── README.md               # Required: Deployment guide (read and executed by Claude Code)
 ├── prompt/
-│   ├── SYSTEM.md           # 必需：触手系统提示词
-│   ├── AGENTS.md           # 可选：行为规则
-│   └── TOOLS.md            # 可选：工具描述
+│   ├── SYSTEM.md           # Required: Tentacle system prompt
+│   ├── AGENTS.md           # Optional: Behavior rules
+│   └── TOOLS.md            # Optional: Tool descriptions
 ├── src/
-│   ├── main.py             # 必需：主进程入口
-│   ├── ipc_client.py       # 推荐：标准 IPC 客户端
-│   ├── ...                 # 其他业务代码
-│   └── requirements.txt    # 必需：依赖列表
-└── docs/                   # 可选：参考文档
+│   ├── main.py             # Required: Main process entry point
+│   ├── ipc_client.py       # Recommended: Standard IPC client
+│   ├── ...                 # Other business code
+│   └── requirements.txt    # Required: Dependency list
+└── docs/                   # Optional: Reference documentation
 ```
 
-## SKILL.md Frontmatter 规范
+## SKILL.md Frontmatter Specification
 
 ```yaml
 ---
 name: my-tentacle
-description: 一句话描述触手功能
+description: One-line description of tentacle functionality
 version: 1.0.0
 trigger_keywords:
   - keyword1
@@ -36,103 +36,103 @@ metadata:
   openceph:
     emoji: 🔍
     trigger_keywords:
-      - 触发词1
-      - 触发词2
+      - trigger word 1
+      - trigger word 2
     tentacle:
-      spawnable: true                    # 必需：标记为可部署
+      spawnable: true                    # Required: Mark as deployable
       runtime: python                    # python | typescript | go | shell
-      entry: src/main.py                 # 入口文件
+      entry: src/main.py                 # Entry file
       default_trigger: self              # self | external
-      setup_commands:                    # 部署时执行的命令
+      setup_commands:                    # Commands run during deployment
         - pip install -r src/requirements.txt
       requires:
-        bins:                            # 需要的系统命令
+        bins:                            # Required system binaries
           - python3
-        env:                             # 需要的环境变量
+        env:                             # Required environment variables
           - MY_API_KEY
-      capabilities:                      # 触手能力标签
+      capabilities:                      # Tentacle capability tags
         - web_fetch
         - data_filter
-      infrastructure:                    # 基础设施需求
+      infrastructure:                    # Infrastructure requirements
         needsLlm: false
         needsDatabase: false
         needsHttpServer: false
         needsExternalBot: false
-      customizable:                      # 可定制字段
+      customizable:                      # Customizable fields
         - field: my_setting
-          description: 设置描述
-          env_var: MY_SETTING            # 注入到 .env
+          description: Setting description
+          env_var: MY_SETTING            # Injected into .env
           default: "default_value"
           example: "example_value"
         - field: user_name
-          description: 用户名称
-          prompt_placeholder: "{USER_NAME}"  # 替换 SYSTEM.md 中的占位符
-          default: "用户"
+          description: User name
+          prompt_placeholder: "{USER_NAME}"  # Replaces placeholder in SYSTEM.md
+          default: "User"
 ---
 
 # my-tentacle
 
-详细描述...
+Detailed description...
 ```
 
-### 关键字段说明
+### Key Field Descriptions
 
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `spawnable: true` | 是 | 标记为可部署的 skill_tentacle |
-| `runtime` | 是 | 运行时：python / typescript / go / shell |
-| `entry` | 是 | 入口文件路径 |
-| `default_trigger` | 是 | 默认触发模式：self（自管循环）/ external（等待外部触发） |
-| `setup_commands` | 是 | 部署时执行的初始化命令 |
-| `requires.bins` | 否 | 需要预安装的系统命令 |
-| `requires.env` | 否 | 需要用户提供的环境变量 |
-| `customizable` | 否 | 用户可定制的配置字段 |
+| Field | Required | Description |
+|-------|----------|-------------|
+| `spawnable: true` | Yes | Marks as a deployable skill_tentacle |
+| `runtime` | Yes | Runtime: python / typescript / go / shell |
+| `entry` | Yes | Entry file path |
+| `default_trigger` | Yes | Default trigger mode: self (self-managed loop) / external (wait for external trigger) |
+| `setup_commands` | Yes | Initialization commands run during deployment |
+| `requires.bins` | No | System binaries that must be pre-installed |
+| `requires.env` | No | Environment variables the user must provide |
+| `customizable` | No | User-customizable configuration fields |
 
-### Customizable 字段类型
+### Customizable Field Types
 
-1. **env_var 注入**：值写入 `.env` 文件
+1. **env_var injection**: Value written to `.env` file
    ```yaml
    - field: api_key
-     description: API 密钥
+     description: API key
      env_var: MY_API_KEY
    ```
 
-2. **prompt_placeholder 注入**：替换 SYSTEM.md 中的 `{PLACEHOLDER}` 占位符
+2. **prompt_placeholder injection**: Replaces `{PLACEHOLDER}` in SYSTEM.md
    ```yaml
    - field: user_name
      prompt_placeholder: "{USER_NAME}"
-     default: "用户"
+     default: "User"
    ```
 
-## README.md 编写规范
+## README.md Writing Guidelines
 
-README.md 是 Claude Code 部署时的指南，必须包含：
+README.md is the guide Claude Code uses during deployment and must include:
 
-1. **概述**（一句话）
-2. **环境要求**（Python/Node 版本）
-3. **环境变量表**
-4. **部署步骤**（精确的 bash 命令）
-5. **启动命令**
-6. **常见问题**
-7. **个性化指南**
+1. **Overview** (one sentence)
+2. **Environment requirements** (Python/Node version)
+3. **Environment variables table**
+4. **Deployment steps** (exact bash commands)
+5. **Start command**
+6. **FAQ**
+7. **Personalization guide**
 
-示例：
+Example:
 
 ```markdown
 # GitHub Issue Radar
 
-监控指定 GitHub 仓库的新 issue 和 PR。
+Monitor new issues and PRs in specified GitHub repositories.
 
-## 环境要求
+## Environment Requirements
 - Python 3.10+
 
-## 环境变量
-| 变量 | 必需 | 说明 |
-|------|------|------|
-| GITHUB_TOKEN | 是 | GitHub Personal Access Token |
-| GITHUB_REPOS | 是 | 监控的仓库列表（逗号分隔） |
+## Environment Variables
+| Variable | Required | Description |
+|----------|----------|-------------|
+| GITHUB_TOKEN | Yes | GitHub Personal Access Token |
+| GITHUB_REPOS | Yes | List of repositories to monitor (comma-separated) |
 
-## 部署步骤
+## Deployment Steps
 ```bash
 cd {TENTACLE_DIR}
 python3 -m venv venv
@@ -140,54 +140,54 @@ source venv/bin/activate
 pip install -r src/requirements.txt
 ```
 
-## 启动命令
+## Start Command
 ```bash
 python3 src/main.py
 ```
 ```
 
-## prompt/SYSTEM.md 编写规范
+## prompt/SYSTEM.md Writing Guidelines
 
 ```markdown
 # Identity
-你是 GitHub Issue Radar 触手。
+You are the GitHub Issue Radar tentacle.
 
 # Mission
-监控指定仓库的 issue 和 PR，筛选 {USER_NAME} 关心的技术话题。
+Monitor issues and PRs in specified repositories, filtering for technical topics that {USER_NAME} cares about.
 
 # User Context
-- 用户名称：{USER_NAME}
-- 技术关注：{USER_TECHNICAL_FOCUS}
+- User name: {USER_NAME}
+- Technical interests: {USER_TECHNICAL_FOCUS}
 
 # Judgment Criteria
-- 重要：与用户关注领域直接相关的 issue
-- 一般：技术讨论、feature request
-- 忽略：bot 生成的、重复的
+- Important: Issues directly related to the user's areas of interest
+- Normal: Technical discussions, feature requests
+- Ignore: Bot-generated, duplicates
 
 # Report Strategy
-- 每个周期批量上报一次
-- 重要发现立即标记
-- 噪音直接丢弃
+- Batch report once per cycle
+- Mark important findings immediately
+- Discard noise directly
 
 # Report Format
-标题：[仓库名] issue 标题
-链接：URL
-摘要：一句话概括
-判断：important / reference / discard
+Title: [repo name] issue title
+Link: URL
+Summary: One-sentence overview
+Judgment: important / reference / discard
 
 # Constraints
-- 不生成代码
-- 不修改任何文件
-- API 调用遵循 rate limit
+- Do not generate code
+- Do not modify any files
+- API calls must respect rate limits
 ```
 
-## IPC 三条契约
+## IPC Three Contracts
 
-所有 skill_tentacle 必须实现：
+All skill_tentacles must implement:
 
-### 契约 1：启动注册
+### Contract 1: Startup Registration
 
-连接到 `OPENCEPH_SOCKET_PATH` 后立即发送：
+Send immediately after connecting to `OPENCEPH_SOCKET_PATH`:
 
 ```json
 {
@@ -196,7 +196,7 @@ python3 src/main.py
   "receiver": "brain",
   "payload": {
     "tentacle_id": "<tentacle_id>",
-    "purpose": "触手使命",
+    "purpose": "Tentacle mission",
     "runtime": "python",
     "pid": 12345
   },
@@ -205,9 +205,9 @@ python3 src/main.py
 }
 ```
 
-### 契约 2：批量上报
+### Contract 2: Batch Reporting
 
-通过 `consultation_request` 上报发现：
+Report findings via `consultation_request`:
 
 ```json
 {
@@ -221,21 +221,21 @@ python3 src/main.py
     "items": [
       {
         "id": "item-1",
-        "content": "发现内容",
-        "reason": "筛选理由",
+        "content": "Finding content",
+        "reason": "Filtering rationale",
         "tentacleJudgment": "important"
       }
     ],
-    "summary": "本次扫描概要"
+    "summary": "Scan summary for this cycle"
   },
   "timestamp": "2024-01-01T00:00:00.000Z",
   "message_id": "uuid"
 }
 ```
 
-### 契约 3：接收指令
+### Contract 3: Receiving Directives
 
-处理来自大脑的 `directive` 消息：
+Handle `directive` messages from the Brain:
 
 ```json
 {
@@ -248,12 +248,12 @@ python3 src/main.py
 }
 ```
 
-## 触发模式
+## Trigger Modes
 
-读取 `OPENCEPH_TRIGGER_MODE` 环境变量：
+Read the `OPENCEPH_TRIGGER_MODE` environment variable:
 
-- **self**：内部定时循环（读取 CHECK_INTERVAL 等配置）
-- **external**：等待 `run_now` 指令触发
+- **self**: Internal timed loop (reads CHECK_INTERVAL and other config)
+- **external**: Wait for `run_now` directive to trigger
 
 ```python
 trigger_mode = os.environ.get("OPENCEPH_TRIGGER_MODE", "self")
@@ -262,30 +262,30 @@ if trigger_mode == "self":
         do_scan()
         time.sleep(interval_seconds)
 else:
-    # 等待 run_now 指令
+    # Wait for run_now directive
     while running:
         time.sleep(1)
 ```
 
-## Python IPC 客户端
+## Python IPC Client
 
-推荐直接复用 OpenCeph 提供的标准 IPC 客户端：
+It is recommended to reuse the standard IPC client provided by OpenCeph:
 
 ```python
 from ipc_client import IpcClient
 
 client = IpcClient(socket_path, tentacle_id)
 client.connect()
-client.register(purpose="监控 GitHub Issues", runtime="python")
+client.register(purpose="Monitor GitHub Issues", runtime="python")
 
-# 上报
+# Report
 client.consultation_request(
     mode="batch",
     items=[{"id": "1", "content": "...", "tentacleJudgment": "important"}],
-    summary="发现 3 个重要 issue"
+    summary="Found 3 important issues"
 )
 
-# 处理指令
+# Handle directives
 def handle_directive(payload):
     action = payload.get("action")
     if action == "kill":
@@ -294,9 +294,9 @@ def handle_directive(payload):
 client.on_directive(handle_directive)
 ```
 
-## --dry-run 支持（推荐）
+## --dry-run Support (Recommended)
 
-实现 `--dry-run` 参数，验证配置和 API 连通性但不启动主循环：
+Implement the `--dry-run` parameter to verify configuration and API connectivity without starting the main loop:
 
 ```python
 if "--dry-run" in sys.argv:
@@ -306,72 +306,72 @@ if "--dry-run" in sys.argv:
     sys.exit(0)
 ```
 
-## 打包与分发
+## Packaging and Distribution
 
-### 打包已部署的触手
+### Packaging a Deployed Tentacle
 
 ```bash
 openceph tentacle pack <tentacle_id>
-# 输出: ~/.openceph/packages/<tentacle_id>.tentacle
+# Output: ~/.openceph/packages/<tentacle_id>.tentacle
 ```
 
-### 安装 skill_tentacle
+### Installing a skill_tentacle
 
 ```bash
-# 从 .tentacle 文件
+# From a .tentacle file
 openceph tentacle install ./my-tentacle.tentacle
 
-# 从 GitHub
+# From GitHub
 openceph tentacle install github:user/repo/skills/my-tentacle
 
-# 从本地目录
+# From a local directory
 openceph tentacle install ./path/to/skill-tentacle/
 ```
 
-### 列出已安装
+### List Installed
 
 ```bash
 openceph tentacle list
 ```
 
-### 查看详情
+### View Details
 
 ```bash
 openceph tentacle info my-tentacle
 ```
 
-### 验证
+### Validate
 
 ```bash
 openceph tentacle validate ./path/to/skill-tentacle/
 ```
 
-## 验证规则
+## Validation Rules
 
-skill_tentacle 在部署前会通过 4 项验证：
+skill_tentacles go through 4 validation checks before deployment:
 
-1. **Structure**：目录结构完整性（SKILL.md, README.md, prompt/SYSTEM.md, src/）
-2. **Syntax**：代码语法正确性（Python: py_compile, TS: tsc --noEmit）
-3. **Contract**：IPC 三契约合规性（tentacle_register, consultation_request, directive 处理）
-4. **Security**：安全黑名单检查（禁止 exec/eval/os.system 等）
+1. **Structure**: Directory structure completeness (SKILL.md, README.md, prompt/SYSTEM.md, src/)
+2. **Syntax**: Code syntax correctness (Python: py_compile, TS: tsc --noEmit)
+3. **Contract**: IPC three-contract compliance (tentacle_register, consultation_request, directive handling)
+4. **Security**: Security blocklist check (prohibits exec/eval/os.system, etc.)
 
-## 示例 skill_tentacle
+## Example skill_tentacles
 
-OpenCeph 内置 3 个示例：
+OpenCeph includes 3 built-in examples:
 
-1. **github-issue-radar** — 监控 GitHub 仓库 issue/PR（Scene 1 参考实现）
-2. **hn-engineering-digest** — HN 工程热帖摘要（Scene 2 产物）
-3. **content-creator-assistant** — 内容创作助手（复杂 Agent 系统）
+1. **github-issue-radar** — Monitor GitHub repo issues/PRs (Scene 1 reference implementation)
+2. **hn-engineering-digest** — HN engineering hot posts digest (Scene 2 artifact)
+3. **content-creator-assistant** — Content creation assistant (complex Agent system)
 
-查看源码：`~/.openceph/skills/` 或项目 `src/templates/skills/`
+View source code: `~/.openceph/skills/` or project `src/templates/skills/`
 
-## 开发流程
+## Development Workflow
 
-1. 创建目录结构
-2. 编写 SKILL.md（frontmatter 必须包含 `spawnable: true`）
-3. 编写 README.md（Claude Code 部署指南）
-4. 编写 prompt/SYSTEM.md（带 `{PLACEHOLDER}` 占位符）
-5. 实现 src/main.py（IPC 三契约 + 触发模式）
-6. 验证：`openceph tentacle validate ./my-tentacle/`
-7. 测试：`python3 src/main.py --dry-run`
-8. 打包：`openceph tentacle pack <id>` 或直接分享目录
+1. Create the directory structure
+2. Write SKILL.md (frontmatter must include `spawnable: true`)
+3. Write README.md (Claude Code deployment guide)
+4. Write prompt/SYSTEM.md (with `{PLACEHOLDER}` placeholders)
+5. Implement src/main.py (IPC three contracts + trigger mode)
+6. Validate: `openceph tentacle validate ./my-tentacle/`
+7. Test: `python3 src/main.py --dry-run`
+8. Package: `openceph tentacle pack <id>` or share the directory directly

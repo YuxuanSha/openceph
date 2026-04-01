@@ -69,27 +69,27 @@ export class TentacleRegistry {
 
     const renderEntry = (entry: TentacleRegistryEntry) => [
       `### ${entry.tentacleId}`,
-      `- **状态：** ${entry.status}`,
-      `- **目的：** ${entry.purpose}`,
-      `- **来源：** ${entry.source ?? "manual"}`,
-      `- **运行时：** ${entry.runtime ?? "unknown"}`,
-      `- **触发：** ${entry.trigger ?? "manual"}`,
-      `- **数据源：** ${entry.dataSources ?? "-"}`,
-      `- **创建：** ${entry.createdAt}`,
-      `- **目录：** ${entry.directory ?? "-"}`,
-      `- **最后上报：** ${entry.lastReport ?? "-"}`,
-      `- **健康度：** ${entry.health ?? "-"}`,
-      `- **调度：** ${entry.scheduleConfig ?? "-"}`,
+      `- **Status:** ${entry.status}`,
+      `- **Purpose:** ${entry.purpose}`,
+      `- **Source:** ${entry.source ?? "manual"}`,
+      `- **Runtime:** ${entry.runtime ?? "unknown"}`,
+      `- **Trigger:** ${entry.trigger ?? "manual"}`,
+      `- **Data Sources:** ${entry.dataSources ?? "-"}`,
+      `- **Created:** ${entry.createdAt}`,
+      `- **Directory:** ${entry.directory ?? "-"}`,
+      `- **Last Report:** ${entry.lastReport ?? "-"}`,
+      `- **Health:** ${entry.health ?? "-"}`,
+      `- **Schedule:** ${entry.scheduleConfig ?? "-"}`,
     ].join("\n")
 
     const content = [
-      "# TENTACLES.md — 触手注册表",
+      "# TENTACLES.md — Tentacle Registry",
       "",
-      "## 运行中的触手",
-      running.length > 0 ? running.map(renderEntry).join("\n\n") : "（无）",
+      "## Running Tentacles",
+      running.length > 0 ? running.map(renderEntry).join("\n\n") : "(none)",
       "",
-      "## 已停用的触手",
-      stopped.length > 0 ? stopped.map(renderEntry).join("\n\n") : "（无）",
+      "## Stopped Tentacles",
+      stopped.length > 0 ? stopped.map(renderEntry).join("\n\n") : "(none)",
       "",
     ].join("\n")
 
@@ -111,21 +111,21 @@ function parseRegistry(content: string): TentacleRegistryEntry[] {
       createdAt: new Date(0).toISOString(),
     }
     for (const line of lines.slice(1)) {
-      const match = line.match(/^- \*\*(.+?)：\*\* (.*)$/)
+      const match = line.match(/^- \*\*(.+?):\*\* (.*)$/)
       if (!match) continue
       const key = match[1]
       const value = match[2]
-      if (key === "状态") record.status = value
-      if (key === "目的") record.purpose = value
-      if (key === "来源") record.source = value
-      if (key === "运行时") record.runtime = value
-      if (key === "触发") record.trigger = value
-      if (key === "数据源") record.dataSources = value
-      if (key === "创建") record.createdAt = value
-      if (key === "目录") record.directory = value
-      if (key === "最后上报") record.lastReport = value
-      if (key === "健康度") record.health = value
-      if (key === "调度") record.scheduleConfig = value
+      if (key === "Status") record.status = value
+      if (key === "Purpose") record.purpose = value
+      if (key === "Source") record.source = value
+      if (key === "Runtime") record.runtime = value
+      if (key === "Trigger") record.trigger = value
+      if (key === "Data Sources") record.dataSources = value
+      if (key === "Created") record.createdAt = value
+      if (key === "Directory") record.directory = value
+      if (key === "Last Report") record.lastReport = value
+      if (key === "Health") record.health = value
+      if (key === "Schedule") record.scheduleConfig = value
     }
     entries.push(record)
   }

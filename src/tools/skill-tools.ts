@@ -8,9 +8,9 @@ export function createSkillTools(skillPaths: string[]): ToolRegistryEntry[] {
   const readSkill: ToolDefinition = {
     name: "read_skill",
     label: "Read Skill",
-    description: "读取 SKILL 定义文件",
+    description: "Read a SKILL definition file",
     parameters: Type.Object({
-      skill_name: Type.String({ description: "SKILL 名称" }),
+      skill_name: Type.String({ description: "SKILL name" }),
     }),
     async execute(_id, params: any) {
       await loader.loadAll()
@@ -35,7 +35,7 @@ export function createSkillTools(skillPaths: string[]): ToolRegistryEntry[] {
   const skillsList: ToolDefinition = {
     name: "skills_list",
     label: "Skills List",
-    description: "列出当前可用的 SKILL",
+    description: "List currently available SKILLs",
     parameters: Type.Object({}),
     async execute() {
       const skills = await loader.loadAll()

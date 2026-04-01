@@ -71,7 +71,7 @@ export interface SkillEntry {
   triggerKeywords?: string[]
   emoji?: string
 
-  // M4 skill_tentacle fields
+  // skill_tentacle fields
   isSkillTentacle: boolean
   skillTentacleConfig?: SkillTentacleConfig
 }
@@ -166,7 +166,7 @@ function parseSkillContent(content: string, skillDir: string): SkillEntry {
   const setupCommands = asStringArray(frontmatter.setup_commands)
   const requires = toStringRecord(frontmatter.requires)
 
-  // M4: Detect metadata.openceph.tentacle for skill_tentacle
+  // Detect metadata.openceph.tentacle for skill_tentacle
   const metadata = frontmatter.metadata as Record<string, unknown> | undefined
   const opencephMeta = metadata?.openceph as Record<string, unknown> | undefined
   const tentacleMeta = opencephMeta?.tentacle as Record<string, unknown> | undefined

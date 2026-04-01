@@ -1,7 +1,7 @@
 ---
 name: template-monitor-ts
 description: |
-  TypeScript 模板触手 — 替换此描述为你的触手目的。
+  TypeScript template tentacle — replace this description with your tentacle's purpose.
 version: 1.0.0
 
 metadata:
@@ -9,7 +9,7 @@ metadata:
     emoji: "🔮"
     category: "monitoring"
     trigger_keywords:
-      - "替换为关键词1"
+      - "replace with keyword 1"
 
     tentacle:
       spawnable: true
@@ -41,11 +41,11 @@ metadata:
 
       customizable:
         - field: "topics"
-          description: "关注的主题（逗号分隔）"
+          description: "Topics of interest (comma-separated)"
           env_var: "MONITOR_TOPICS"
           default: "AI,LLM"
 ---
 
 # Template Monitor (TypeScript)
 
-替换此内容为你的触手说明。
+Replace this content with your tentacle's description.

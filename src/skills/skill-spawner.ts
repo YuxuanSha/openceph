@@ -35,12 +35,12 @@ export interface SpawnParams {
   preferredRuntime?: string
   userConfirmed: boolean
 
-  // M4 additions
+  // skill_tentacle options
   skillTentaclePath?: string
   packageAfter?: boolean
   config?: Record<string, unknown>
 
-  // 场景 B/C 自由文本需求描述（Brain 写给 Claude Code 的任务描述）
+  // Scenario B/C free-text requirement description (task description written by Brain for Claude Code)
   brief?: string
 }
 
@@ -159,7 +159,7 @@ export class SkillSpawner {
         return this.spawnFromScratch(params)
 
       default:
-        return { success: false, errors: [`未知的部署模式：${(params as any).mode}`] }
+        return { success: false, errors: [`Unknown deploy mode: ${(params as any).mode}`] }
     }
   }
 
@@ -192,11 +192,11 @@ export class SkillSpawner {
     } else if (params.skillName) {
       const loaded = this.skillLoader.get(params.skillName)
       if (!loaded?.isSkillTentacle) {
-        return { success: false, errors: [`skill_name "${params.skillName}" 不存在或不是 skill_tentacle。请检查 SKILL 名称。`] }
+        return { success: false, errors: [`skill_name "${params.skillName}" does not exist or is not a skill_tentacle. Please check the SKILL name.`] }
       }
       skill = loaded
     } else {
-      return { success: false, errors: ["mode=deploy 需要 skill_name 或 skill_tentacle_path"] }
+      return { success: false, errors: ["mode=deploy requires skill_name or skill_tentacle_path"] }
     }
 
     const tentacleDir = path.join(this.tentacleManager.getTentacleBaseDir(), params.tentacleId)
@@ -312,8 +312,8 @@ export class SkillSpawner {
         await this.tentacleManager.kill(params.tentacleId, "deploy_failed").catch(() => {})
         await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
         const hints: string[] = []
-        if (cmd.includes("python3")) hints.push("建议：请确认 python3 已安装（运行 which python3 检查）")
-        if (cmd.includes("pip install")) hints.push("建议：请检查 requirements.txt 中的包名是否正确")
+        if (cmd.includes("python3")) hints.push("Suggestion: please confirm python3 is installed (run which python3 to check)")
+        if (cmd.includes("pip install")) hints.push("Suggestion: please check that the package names in requirements.txt are correct")
         brainLogger.error("skill_tentacle_deploy_failed", {
           tentacle_id: params.tentacleId,
           error: err.stderr || err.message,
@@ -323,9 +323,9 @@ export class SkillSpawner {
         return {
           success: false,
           errors: [
-            `部署中止：setup_command 执行失败`,
-            `命令：${cmd}`,
-            `错误：${(err.stderr || err.message || "").toString().slice(0, 500)}`,
+            `Deployment aborted: setup_command execution failed`,
+            `Command: ${cmd}`,
+            `Error: ${(err.stderr || err.message || "").toString().slice(0, 500)}`,
             ...hints,
           ].filter(Boolean),
         }
@@ -406,11 +406,11 @@ export class SkillSpawner {
     } else if (params.skillName) {
       const loaded = this.skillLoader.get(params.skillName)
       if (!loaded?.isSkillTentacle) {
-        return { success: false, errors: [`skill_name "${params.skillName}" 不存在或不是 skill_tentacle`] }
+        return { success: false, errors: [`skill_name "${params.skillName}" does not exist or is not a skill_tentacle`] }
       }
       skill = loaded
     } else {
-      return { success: false, errors: ["mode=customize 需要 skill_name 或 skill_tentacle_path"] }
+      return { success: false, errors: ["mode=customize requires skill_name or skill_tentacle_path"] }
     }
 
     const tentacleDir = path.join(this.tentacleManager.getTentacleBaseDir(), params.tentacleId)
@@ -458,7 +458,7 @@ export class SkillSpawner {
     } catch (err: any) {
       await this.tentacleManager.kill(params.tentacleId, "deploy_failed").catch(() => {})
       await fs.rm(tentacleDir, { recursive: true, force: true }).catch(() => {})
-      return { success: false, errors: [`定制化部署失败：${err.message}`] }
+      return { success: false, errors: [`Customization deployment failed: ${err.message}`] }
     }
 
     // Step 5b: Safety check — if Claude Code deleted critical files, restore them from snapshot
@@ -493,8 +493,8 @@ export class SkillSpawner {
           return {
             success: false,
             errors: [
-              `定制化部署中止：Claude Code 删除了关键文件 ${path.basename(relFile)} 且无法恢复`,
-              `原始错误：${restoreErr.message}`,
+              `Customization deployment aborted: Claude Code deleted critical file ${path.basename(relFile)} and it could not be restored`,
+              `Original error: ${restoreErr.message}`,
             ],
           }
         }
@@ -569,15 +569,15 @@ export class SkillSpawner {
         const packager = this.createPackager()
         resolvedDir = await packager.install(skillPath)
       } else {
-        return { success: false, errors: [`skill_tentacle_path 不是目录或 .tentacle 文件: ${skillPath}`] }
+        return { success: false, errors: [`skill_tentacle_path is not a directory or .tentacle file: ${skillPath}`] }
       }
     } catch (err: any) {
-      return { success: false, errors: [`skill_tentacle_path 无法访问: ${err.message}`] }
+      return { success: false, errors: [`skill_tentacle_path is not accessible: ${err.message}`] }
     }
 
     const skill = await this.skillLoader.loadSingle(resolvedDir)
     if (!skill?.isSkillTentacle) {
-      return { success: false, errors: [`${resolvedDir} 不是有效的 skill_tentacle 目录`] }
+      return { success: false, errors: [`${resolvedDir} is not a valid skill_tentacle directory`] }
     }
     return { success: true, skill }
   }
@@ -711,7 +711,7 @@ export class SkillSpawner {
     } catch (err: any) {
       return {
         success: false,
-        errors: [`部署失败：${err.message}`],
+        errors: [`Deployment failed: ${err.message}`],
         codeAgentSessionFile: lastCodeAgentArtifact?.sessionFile,
         codeAgentWorkDir: lastCodeAgentArtifact?.workDir,
         codeAgentLogsDir: lastCodeAgentArtifact?.logsDir,
@@ -774,7 +774,7 @@ export class SkillSpawner {
     }
   }
 
-  // ── Legacy: Generate from SKILL blueprint (M3 compatible) ──
+  // ── Generate from classic SKILL blueprint ──
 
   private async spawnFromLegacySkill(params: SpawnParams): Promise<SpawnResult> {
     // 1. Build CodeAgentRequirement
@@ -858,7 +858,7 @@ export class SkillSpawner {
         tentacle_id: params.tentacleId,
         error: error.message,
       })
-      deployError = `部署失败: ${error.message}`
+      deployError = `Deployment failed: ${error.message}`
     }
 
     systemLogger.info("tentacle_generated", {
@@ -973,10 +973,10 @@ export class SkillSpawner {
       const missingSummary = missingRequiredEnv
         .map((missing) => {
           const primaryCredential = this.getPrimaryCredentialCandidate(missing.envVar)
-          return `${missing.envVar}（请运行 openceph credentials set ${primaryCredential} <value>，或设置环境变量 ${missing.envVar}）`
+          return `${missing.envVar} (run 'openceph credentials set ${primaryCredential} <value>', or set environment variable ${missing.envVar})`
         })
-        .join("，")
-      throw new Error(`skill_tentacle 缺少必需环境变量：${missingSummary}`)
+        .join("; ")
+      throw new Error(`skill_tentacle missing required environment variables: ${missingSummary}`)
     }
 
     const envLines = Array.from(envEntries.entries()).map(([key, value]) => `${key}=${value}`)
@@ -1194,7 +1194,7 @@ export class SkillSpawner {
 
     for (const bin of tentacleConfig.requires.bins) {
       if (!(await hasCommand(bin))) {
-        errors.push(`skill_tentacle ${skillName} 缺少必需命令：${bin}`)
+        errors.push(`skill_tentacle ${skillName} missing required command: ${bin}`)
       }
     }
 
@@ -1202,7 +1202,7 @@ export class SkillSpawner {
       const value = await this.resolveRequiredEnvValue(envVar)
       if (!value) {
         const primaryCredential = this.getPrimaryCredentialCandidate(envVar)
-        errors.push(`skill_tentacle ${skillName} 缺少必需环境变量：${envVar}（请运行 openceph credentials set ${primaryCredential} <value>，或设置环境变量 ${envVar}）`)
+        errors.push(`skill_tentacle ${skillName} missing required environment variable: ${envVar} (run 'openceph credentials set ${primaryCredential} <value>', or set environment variable ${envVar})`)
       }
     }
 

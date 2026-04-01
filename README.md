@@ -67,6 +67,24 @@ Development mode (auto-reload):
 npm run dev -- start
 ```
 
+### Stop / Restart
+
+```bash
+# Stop all running OpenCeph processes
+pkill -9 -f "cli.ts start"
+
+# Restart (stop + start)
+pkill -9 -f "cli.ts start" && sleep 2 && npx tsx src/cli.ts start
+
+# Full re-initialization (backup → init → restore config → start)
+mv ~/.openceph ~/.openceph_backup_$(date +%Y%m%d_%H%M%S)
+npx tsx src/cli.ts init
+cp ~/.openceph_backup_*/openceph.json ~/.openceph/openceph.json
+cp ~/.openceph_backup_*/credentials/* ~/.openceph/credentials/
+npx tsx src/cli.ts upgrade
+npx tsx src/cli.ts start
+```
+
 ## How it works (short)
 
 ```
@@ -130,17 +148,19 @@ Autonomous agent subprocesses — the octopus's arms. Each tentacle is an indepe
 
 **Health scoring**: Automatic weakening/strengthening based on report quality. Low-health tentacles get killed.
 
-**7 builtin tentacles**:
+**Builtin tentacles**:
 
-| Tentacle | Description |
-|----------|------------|
-| `hn-radar` | Hacker News monitoring with LLM filtering |
-| `arxiv-paper-scout` | ArXiv paper tracking by research interests |
-| `github-release-watcher` | GitHub release monitoring for key repos |
-| `daily-digest-curator` | Daily summary generation and delivery |
-| `price-alert-monitor` | Price change detection and alerting |
-| `uptime-watchdog` | Service availability monitoring |
-| `skill-tentacle-creator` | Scaffolding tool for creating new tentacles |
+| Tentacle | Status | Description |
+|----------|--------|------------|
+| `hn-radar` | Released | Hacker News monitoring with LLM filtering |
+| `arxiv-paper-scout` | Building | ArXiv paper tracking by research interests |
+| `github-release-watcher` | Building | GitHub release monitoring for key repos |
+| `daily-digest-curator` | Building | Daily summary generation and delivery |
+| `price-alert-monitor` | Building | Price change detection and alerting |
+| `uptime-watchdog` | Building | Service availability monitoring |
+| `skill-tentacle-creator` | Building | Scaffolding tool for creating new tentacles |
+
+> **Want to build a tentacle?** We're building OpenCeph in the open and would love your help. Check the [Tentacle Development Guide](docs/skill-tentacle-guide.md) to get started. Contributions, ideas, and feedback are all welcome — join the community and let's build together!
 
 ### Memory
 

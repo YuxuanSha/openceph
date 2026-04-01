@@ -6,7 +6,7 @@ import { extractText, formatAsFeishuText, feishuCardContent } from "./formatter.
 import { gatewayLogger } from "../../../logger/index.js"
 
 const FEISHU_STREAM_THROTTLE_MS = 2000
-const FEISHU_STREAM_PLACEHOLDER = "💭 思考中..."
+const FEISHU_STREAM_PLACEHOLDER = "💭 Thinking..."
 const FEISHU_START_TIMEOUT_MS = 2000
 const FEISHU_MESSAGE_ID_TTL_MS = 24 * 60 * 60 * 1000
 const FEISHU_STALE_MESSAGE_GRACE_MS = 15_000
@@ -22,7 +22,7 @@ type StartupMonitor = {
 
 export class FeishuChannelPlugin implements ChannelPlugin {
   readonly channelId = "feishu"
-  readonly displayName = "飞书 (Feishu)"
+  readonly displayName = "Feishu"
   readonly defaultDmPolicy: DmPolicy = "pairing"
 
   private client: any = null
@@ -158,7 +158,7 @@ export class FeishuChannelPlugin implements ChannelPlugin {
           return
         }
 
-        // M1 only supports plain text DM input.
+        // Only plain text DM input is supported for now.
         if (messageType && messageType !== "text") {
           gatewayLogger.info("feishu_non_text_ignored", {
             message_id: messageId,

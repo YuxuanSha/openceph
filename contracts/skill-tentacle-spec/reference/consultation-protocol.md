@@ -1,129 +1,129 @@
-# Consultation Session 协议完整参考
+# Consultation Session Protocol Complete Reference
 
-**文件位置：** `contracts/skill-tentacle-spec/reference/consultation-protocol.md`  
-**用途：** 触手与 Brain 之间 Consultation Session 的完整交互流程
-
----
-
-## 1. 概述
-
-Consultation Session 是触手 Agent 与 Brain Agent 之间的多轮对话。触手作为 "user" 汇报发现，Brain 作为 "assistant" 阅读、追问、做推送决策。
-
-**关键特性：**
-- Brain 在对话过程中可以**随时**调用 `send_to_user` 推送给用户，不需等到对话结束
-- Brain 可以追问触手细节，触手用自己的 Agent 能力（调 LLM、调工具）回答
-- 一次 consultation 可以处理多条汇报项目
+**File location:** `contracts/skill-tentacle-spec/reference/consultation-protocol.md`
+**Purpose:** Complete interaction flow for Consultation Sessions between tentacles and Brain
 
 ---
 
-## 2. 完整流程
+## 1. Overview
+
+A Consultation Session is a multi-turn conversation between a tentacle Agent and the Brain Agent. The tentacle acts as the "user" reporting findings, while Brain acts as the "assistant" reading, asking follow-up questions, and making push decisions.
+
+**Key characteristics:**
+- Brain can call `send_to_user` to push content to the user **at any time** during the conversation, without waiting for the conversation to end
+- Brain can ask the tentacle for details, and the tentacle answers using its own Agent capabilities (calling LLMs, calling tools)
+- A single consultation can process multiple report items
+
+---
+
+## 2. Complete Flow
 
 ```
-触手（积攒够了 / 有紧急项）
+Tentacle (has accumulated enough items / has urgent item)
   │
-  │ 第二层 Agent 激活，分析积攒内容
-  │ 整理成结构化的汇报报告
-  │
-  ▼
-步骤 1：触手发送 consultation_request
-  │     payload.initial_message = 完整汇报内容
+  │ Second-layer Agent activates, analyzes accumulated content
+  │ Organizes into a structured report
   │
   ▼
-步骤 2：Brain 创建 Consultation Session
-  │     · 生成 consultation_id
-  │     · 加载 ~/.openceph/workspace/CONSULTATION.md 模板
-  │     · 填充占位符（触手信息、用户记忆、偏好）
-  │     · 将 initial_message 作为第一条 "user" 消息
+Step 1: Tentacle sends consultation_request
+  │     payload.initial_message = full report content
   │
   ▼
-步骤 3：Brain 处理汇报
-  │     Brain 阅读内容，可能执行以下动作：
-  │     (a) 调用 send_to_user → 推送重要信息给用户
-  │     (b) 回复触手追问细节
-  │     (c) 告知触手某些内容不推送
-  │     → 发送 consultation_reply
+Step 2: Brain creates Consultation Session
+  │     · Generates consultation_id
+  │     · Loads ~/.openceph/workspace/CONSULTATION.md template
+  │     · Fills placeholders (tentacle info, user memory, preferences)
+  │     · Uses initial_message as the first "user" message
   │
   ▼
-步骤 4：触手收到 reply
-  │     检查 payload.continue：
-  │     · true → Brain 还有追问，处理后发 consultation_message
-  │     · false → 跳到步骤 6
-  │     检查 payload.actions_taken：
-  │     · 记录哪些已推送、哪些已丢弃
+Step 3: Brain processes the report
+  │     Brain reads the content and may take the following actions:
+  │     (a) Call send_to_user → push important info to user
+  │     (b) Reply to tentacle asking for details
+  │     (c) Inform tentacle that certain content will not be pushed
+  │     → Sends consultation_reply
   │
   ▼
-步骤 5：多轮对话（重复步骤 3-4）
-  │     · Brain 追问 → 触手回答 → Brain 再判断
-  │     · Brain 随时可能推送给用户（actions_taken 中体现）
-  │     · 直到 Brain 发送 continue=false 或 consultation_close
+Step 4: Tentacle receives reply
+  │     Checks payload.continue:
+  │     · true → Brain has follow-up questions, process and send consultation_message
+  │     · false → Go to Step 6
+  │     Checks payload.actions_taken:
+  │     · Record which items were pushed, which were discarded
   │
   ▼
-步骤 6：Consultation 结束
-  │     Brain 发送 consultation_close
-  │     触手收到后：
-  │     · 清空 pending 队列中已提交的内容
-  │     · 写入 reports/submitted/ 归档
-  │     · 更新 workspace/STATUS.md
-  │     · 更新 workspace/REPORTS.md
-  │     · 如果有 feedback，记录供后续 Agent 参考
+Step 5: Multi-turn conversation (repeat Steps 3-4)
+  │     · Brain asks → tentacle answers → Brain makes further decisions
+  │     · Brain may push to user at any time (reflected in actions_taken)
+  │     · Until Brain sends continue=false or consultation_close
   │
   ▼
-触手回到第一层 daemon 循环
+Step 6: Consultation ends
+  │     Brain sends consultation_close
+  │     Tentacle upon receiving:
+  │     · Clears submitted content from pending queue
+  │     · Writes to reports/submitted/ for archival
+  │     · Updates workspace/STATUS.md
+  │     · Updates workspace/REPORTS.md
+  │     · If feedback is provided, records it for future Agent reference
+  │
+  ▼
+Tentacle returns to first-layer daemon loop
 ```
 
 ---
 
-## 3. 触手侧实现要点
+## 3. Tentacle-Side Implementation Details
 
-### 3.1 发起 consultation
+### 3.1 Initiating a Consultation
 
 ```python
-# 当积攒内容达到阈值时
+# When accumulated content reaches the threshold
 if len(pending) >= config.batch_threshold:
-    # 先用 Agent 分析、筛选
+    # First use Agent to analyze and filter
     consultation_items = activate_agent(pending)
 
     if consultation_items:
-        # 整理汇报内容
+        # Organize report content
         report = format_consultation_report(consultation_items)
 
-        # 发起 consultation
+        # Initiate consultation
         ipc.consultation_request(
             mode="batch",
-            summary=f"发现 {len(consultation_items)} 条值得关注的内容",
+            summary=f"Found {len(consultation_items)} items worth attention",
             initial_message=report,
             context={"total_scanned": db.get_stat("total_scanned")},
         )
-        pending = []  # 清空已提交的 pending
+        pending = []  # Clear submitted pending items
 ```
 
-### 3.2 处理 Brain 追问
+### 3.2 Handling Brain Follow-Up Questions
 
 ```python
 @ipc.on_consultation_reply
 def handle_reply(consultation_id, message, actions_taken, should_continue):
-    # 记录 Brain 的动作
+    # Record Brain's actions
     for action in actions_taken:
         if action["action"] == "pushed_to_user":
             log.consultation("item_pushed", item_ref=action["item_ref"])
 
     if not should_continue:
-        return  # Brain 不再追问
+        return  # Brain has no more questions
 
-    # Brain 追问了，需要回答
-    # 使用 Agent 能力获取详情
+    # Brain asked a follow-up question; need to answer
+    # Use Agent capabilities to get details
     answer = answer_brain_question(message, consultation_id)
     ipc.consultation_message(consultation_id, answer)
 
 
 def answer_brain_question(question, consultation_id):
-    """用 Agent 能力回答 Brain 的追问"""
+    """Use Agent capabilities to answer Brain's follow-up question"""
     llm = LlmClient()
     tools = load_tools("tools/tools.json")
 
-    # 可以启动一个小的 Agent Loop 来回答
+    # Can start a small Agent Loop to answer
     agent = AgentLoop(
-        system_prompt=f"你正在回答 Brain 的追问。问题：{question}",
+        system_prompt=f"You are answering Brain's follow-up question. Question: {question}",
         tools=tools,
         max_turns=5,
         ipc=ipc,
@@ -134,7 +134,7 @@ def answer_brain_question(question, consultation_id):
     )
 ```
 
-### 3.3 处理 consultation 结束
+### 3.3 Handling Consultation End
 
 ```python
 @ipc.on_consultation_close
@@ -145,7 +145,7 @@ def handle_close(consultation_id, summary, pushed_count, discarded_count, feedba
         discarded=discarded_count,
     )
 
-    # 归档
+    # Archive
     archive_data = {
         "consultation_id": consultation_id,
         "submitted_at": datetime.now(timezone.utc).isoformat(),
@@ -157,73 +157,73 @@ def handle_close(consultation_id, summary, pushed_count, discarded_count, feedba
     archive_path = Path(config.tentacle_dir) / "reports" / "submitted" / f"{date_str}-{consultation_id}.json"
     archive_path.write_text(json.dumps(archive_data, ensure_ascii=False, indent=2))
 
-    # 更新 workspace 文件
+    # Update workspace files
     update_status_md()
     append_to_reports_md(consultation_id, pushed_count, discarded_count, feedback)
 
-    # 如果有 feedback，保存供后续 Agent 参考
+    # If feedback is provided, save it for future Agent reference
     if feedback:
         db.set_state("last_brain_feedback", feedback)
 ```
 
 ---
 
-## 4. 汇报内容格式建议
+## 4. Report Content Format Recommendations
 
-initial_message 是自然语言，但建议使用以下结构化格式便于 Brain 阅读：
+The initial_message is natural language, but the following structured format is recommended for easier Brain reading:
 
 ```
-我刚完成了一轮 {数据源} 扫描，从 {总数} 条数据中筛选出 {N} 条值得关注的。
+I just completed a round of {data source} scanning, filtering {N} items worth attention from {total} entries.
 
-### 概览
-- 扫描范围：{时间范围}
-- 总计扫描：{总数}
-- 规则筛选：{规则筛选数}
-- Agent 精读保留：{N}
+### Overview
+- Scan range: {time range}
+- Total scanned: {total}
+- Rule filtered: {rule filtered count}
+- Retained after Agent deep read: {N}
 
-### 详细发现
+### Detailed Findings
 
-1. **[重要] {标题}**
-   {2-3 句话摘要}
-   重要程度：important
-   理由：{为什么值得推送给用户}
-   链接：{URL}
+1. **[Important] {Title}**
+   {2-3 sentence summary}
+   Importance level: important
+   Reason: {Why it is worth pushing to the user}
+   Link: {URL}
 
-2. **[参考] {标题}**
-   {摘要}
-   重要程度：reference
-   理由：{为什么保留但不紧急}
-   链接：{URL}
+2. **[Reference] {Title}**
+   {Summary}
+   Importance level: reference
+   Reason: {Why it is retained but not urgent}
+   Link: {URL}
 
 3. ...
 ```
 
 ---
 
-## 5. Consultation Session 超时与限制
+## 5. Consultation Session Timeouts and Limits
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `maxTurns` | 20 | 最大对话轮次（超过后 Brain 强制结束） |
-| `maxAgeMinutes` | 30 | 最长持续时间（超过后 Brain 强制结束） |
-| `replyTimeout` | 120s | 触手回复超时（超过后 Brain 视为触手无法回答） |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `maxTurns` | 20 | Maximum conversation turns (Brain forces close if exceeded) |
+| `maxAgeMinutes` | 30 | Maximum duration (Brain forces close if exceeded) |
+| `replyTimeout` | 120s | Tentacle reply timeout (Brain assumes tentacle cannot answer if exceeded) |
 
-这些参数在 `openceph.json` 的 `tentacle.consultation` 中配置。
+These parameters are configured in `tentacle.consultation` within `openceph.json`.
 
 ---
 
-## 6. 紧急 consultation
+## 6. Urgent Consultation
 
-当触手发现紧急内容（如 uptime-watchdog 检测到服务宕机）时：
+When a tentacle discovers urgent content (e.g., uptime-watchdog detects a service outage):
 
 ```python
 ipc.consultation_request(
-    mode="realtime",        # 不是 batch
-    summary="紧急：API 端点不可达",
-    urgency="urgent",       # 标记为紧急
-    initial_message="🚨 检测到 https://api.myapp.com/health 返回 503...",
+    mode="realtime",        # Not batch
+    summary="Urgent: API endpoint unreachable",
+    urgency="urgent",       # Marked as urgent
+    initial_message="🚨 Detected https://api.myapp.com/health returning 503...",
     context={},
 )
 ```
 
-Brain 收到 `urgency: "urgent"` 的 consultation 会立即处理（跳过排队），通常会直接推送给用户。
+Brain processes consultations with `urgency: "urgent"` immediately (skipping the queue) and typically pushes directly to the user.

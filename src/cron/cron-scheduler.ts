@@ -277,7 +277,7 @@ export class CronScheduler {
 function createDefaultDailyReview(timezone: string): CronJob {
   return {
     jobId: "daily-review",
-    name: "每日复盘",
+    name: "Daily Review",
     schedule: { kind: "cron", expr: "0 22 * * *", tz: timezone },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
@@ -297,7 +297,7 @@ function createMorningDigestFallback(timezone: string, time: string): CronJob {
   const [hour = "9", minute = "0"] = time.split(":")
   return {
     jobId: "morning-digest-fallback",
-    name: "晨间兜底推送",
+    name: "Morning Digest Fallback",
     schedule: { kind: "cron", expr: `${Number(minute)} ${Number(hour)} * * *`, tz: timezone },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",

@@ -5,4 +5,3 @@ name: Ceph
 role: Personal AI Operating System
 emoji: 🐙
 version: openceph/2.0.0
-owner: Yuxuan

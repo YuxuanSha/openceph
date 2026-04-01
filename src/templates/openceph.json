@@ -1,5 +1,5 @@
-// OpenCeph 配置文件 - 修改后无需重启（热重载）
-// 凭据请用 "from:credentials/<name>" 引用，不要直接写在这里
+// OpenCeph configuration file - hot-reloads on change (no restart needed)
+// For credentials, use "from:credentials/<name>" references; do not write them directly here
 {
   "meta": { "version": "3.2" },
 

@@ -16,63 +16,63 @@ export class BriefingBuilder {
   private getSpecSection(): string {
     const contractsDir = path.join(os.homedir(), ".openceph/contracts/skill-tentacle-spec")
 
-    return `=== 开发规范 ===
+    return `=== Development Spec ===
 
-你必须按照 OpenCeph skill_tentacle 规范来开发。核心要求：
-- 使用三层架构：工程 Daemon（纯代码循环）+ Agent 能力（LLM 判断）+ Consultation（与 Brain 对话）
-- 所有 LLM 调用通过 LLM Gateway（env var: OPENCEPH_LLM_GATEWAY_URL），不硬编码任何 API key
-- 使用 openceph-runtime 库处理 IPC 通信和 LLM 调用，不自己实现
-- IPC 协议为 stdin/stdout JSON Lines，启动后必须发送 tentacle_register
-- 必须处理 directive（pause/resume/kill）
-- 日志使用 TentacleLogger，不自己写文件
-- 只修改业务逻辑，不改 IPC 通信骨架和三层架构结构
+You must develop according to the OpenCeph skill_tentacle specification. Core requirements:
+- Use the three-layer architecture: Engineering Daemon (pure code loop) + Agent Capability (LLM judgment) + Consultation (dialogue with Brain)
+- All LLM calls go through LLM Gateway (env var: OPENCEPH_LLM_GATEWAY_URL); do not hardcode any API keys
+- Use the openceph-runtime library for IPC communication and LLM calls; do not implement your own
+- IPC protocol is stdin/stdout JSON Lines; must send tentacle_register after startup
+- Must handle directives (pause/resume/kill)
+- Use TentacleLogger for logging; do not write log files yourself
+- Only modify business logic; do not alter the IPC communication skeleton or three-layer architecture structure
 
-完整规范和详细参考文档在以下目录，开始写代码前请阅读：
-  ${contractsDir}/SPEC.md          ← 主规范（必读）
-  ${contractsDir}/reference/       ← 详细参考（按需查阅）
-  ${contractsDir}/examples/        ← 可运行的完整模板（可作为骨架复制）
+Complete specification and detailed reference documents are in the following directory; please read before writing code:
+  ${contractsDir}/SPEC.md          <- Main spec (required reading)
+  ${contractsDir}/reference/       <- Detailed references (consult as needed)
+  ${contractsDir}/examples/        <- Runnable complete templates (can be used as skeleton)
 `
   }
 
   async build(params: BriefingParams): Promise<string> {
     let briefing = ""
 
-    // Part 1: 结构化元数据
-    briefing += `=== 工作指令 ===\n\n`
-    briefing += `触手 ID：${params.tentacleId}\n`
-    briefing += `工作目录：${params.tentacleDir}\n`
-    briefing += `目标语言：${params.runtime}\n`
-    briefing += `任务类型：${params.mode}\n`
+    // Part 1: Structured metadata
+    briefing += `=== Work Instructions ===\n\n`
+    briefing += `Tentacle ID: ${params.tentacleId}\n`
+    briefing += `Working Directory: ${params.tentacleDir}\n`
+    briefing += `Target Language: ${params.runtime}\n`
+    briefing += `Task Type: ${params.mode}\n`
     if (params.baseSkillName) {
-      briefing += `基于 SKILL：${params.baseSkillName}\n`
+      briefing += `Based on SKILL: ${params.baseSkillName}\n`
     }
     const contractsDir = path.join(os.homedir(), ".openceph/contracts/skill-tentacle-spec")
-    briefing += `规范文档：${contractsDir}/SPEC.md\n`
-    briefing += `\n重要：开始工作前，先读取规范文档目录下的 SPEC.md 及 reference/ 中的所有参考文件。\n`
+    briefing += `Spec Document: ${contractsDir}/SPEC.md\n`
+    briefing += `\nImportant: Before starting work, read SPEC.md and all reference files under reference/ in the spec document directory.\n`
 
     if (params.mode === "customize") {
-      briefing += `严格按照规范修改，只改业务逻辑，不改系统协议层。\n`
+      briefing += `Strictly follow the spec for modifications; only change business logic, do not alter the system protocol layer.\n`
     }
     if (params.mode === "create") {
-      briefing += `按照规范中的目录结构、三层架构、IPC 协议来生成完整的 skill_tentacle 包。\n`
-      briefing += `可以参考 ${contractsDir}/examples/ 中的模板作为骨架。\n`
+      briefing += `Follow the directory structure, three-layer architecture, and IPC protocol in the spec to generate a complete skill_tentacle package.\n`
+      briefing += `You can reference the templates in ${contractsDir}/examples/ as a skeleton.\n`
     }
 
-    // Part 2: 规范摘要 + 路径指引（固定内容）
+    // Part 2: Spec summary + path guidance (fixed content)
     briefing += `\n${this.getSpecSection()}\n`
 
-    // Part 3: 自然语言工作简报（Brain Agent 写的）
-    briefing += `=== 任务简报 ===\n\n${params.brief || "（无额外说明，根据触手使命自行决定工作方式）"}\n`
+    // Part 3: Natural language task briefing (written by Brain Agent)
+    briefing += `=== Task Briefing ===\n\n${params.brief || "(No additional instructions; determine workflow based on tentacle mission)"}\n`
 
-    // Part 4: 约束提醒（固定内容）
-    briefing += `\n=== 约束 ===\n\n`
-    briefing += `1. 所有 LLM 调用必须通过 LLM Gateway（env var: OPENCEPH_LLM_GATEWAY_URL），\n`
-    briefing += `   不要硬编码任何 API key 或 provider URL。\n`
-    briefing += `2. 使用 openceph-runtime 库，不要自己实现 IPC 或 LLM 调用逻辑。\n`
+    // Part 4: Constraint reminders (fixed content)
+    briefing += `\n=== Constraints ===\n\n`
+    briefing += `1. All LLM calls must go through LLM Gateway (env var: OPENCEPH_LLM_GATEWAY_URL);\n`
+    briefing += `   do not hardcode any API key or provider URL.\n`
+    briefing += `2. Use the openceph-runtime library; do not implement IPC or LLM call logic yourself.\n`
     if (params.mode === "customize") {
-      briefing += `3. 只修改业务逻辑，不要改动 IPC 通信骨架和三层架构结构。\n`
+      briefing += `3. Only modify business logic; do not alter the IPC communication skeleton or three-layer architecture structure.\n`
     }
-    briefing += `${params.mode === "customize" ? "4" : "3"}. 改完后确保 --dry-run 能通过。\n`
+    briefing += `${params.mode === "customize" ? "4" : "3"}. After changes, ensure --dry-run passes.\n`
 
     return briefing
   }

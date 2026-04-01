@@ -1,6 +1,6 @@
 """
-IPC 客户端 — OpenCeph stdin/stdout JSON Lines 协议
-所有 Python skill_tentacle 直接复用此文件。
+IPC Client — OpenCeph stdin/stdout JSON Lines protocol
+All Python skill_tentacles reuse this file directly.
 """
 
 import json
@@ -24,7 +24,7 @@ class IpcClient:
     def connect(self):
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
-        log.info("IPC 已就绪（stdin/stdout）")
+        log.info("IPC ready (stdin/stdout)")
 
     def _send(self, msg: dict):
         line = json.dumps(msg, ensure_ascii=False) + "\n"
@@ -40,16 +40,16 @@ class IpcClient:
                 msg = json.loads(line)
                 self._handle_incoming(msg)
             except Exception as exc:
-                log.error(f"IPC 接收异常：{exc}")
+                log.error(f"IPC receive error: {exc}")
 
     def _handle_incoming(self, msg: dict):
         msg_type = msg.get("type")
         if msg_type == "directive" and self._directive_handler:
             self._directive_handler(msg.get("payload", {}))
         elif msg_type == "consultation_reply":
-            log.info(f"协商回复：{msg.get('payload', {}).get('decision')}")
+            log.info(f"Consultation reply: {msg.get('payload', {}).get('decision')}")
 
-    # ── 契约 1：启动注册 ──
+    # ── Contract 1: Startup registration ──
     def register(self, purpose: str, runtime: str):
         self._send({
             "type": "tentacle_register",
@@ -65,7 +65,7 @@ class IpcClient:
             "message_id": str(uuid.uuid4()),
         })
 
-    # ── 契约 2：批量上报 ──
+    # ── Contract 2: Batch reporting ──
     def consultation_request(self, mode: str, items: list, summary: str, context: str = ""):
         self._send({
             "type": "consultation_request",
@@ -83,7 +83,7 @@ class IpcClient:
             "message_id": str(uuid.uuid4()),
         })
 
-    # ── 契约 3：接收指令 ──
+    # ── Contract 3: Receive directives ──
     def on_directive(self, handler: Callable):
         self._directive_handler = handler
 

@@ -1,28 +1,28 @@
-# HN Radar 工具使用指南
+# HN Radar Tools Usage Guide
 
-## websearch — 网页搜索
+## websearch — Web Search
 
-通过 Jina Search API 搜索网页内容。
+Search web content via the Jina Search API.
 
-**使用场景：**
-- Brain 追问某个话题的更多背景
-- 需要确认某个技术/产品/公司的最新状态
-- 需要对比多个相关信息源
+**Use cases:**
+- Brain asks for more background on a topic
+- Need to verify the latest status of a technology/product/company
+- Need to compare multiple related information sources
 
-**注意：**
-- 每次搜索消耗一次 Jina API 配额
-- 搜索结果已经是提取后的文本，不需要再 webfetch
+**Notes:**
+- Each search consumes one Jina API quota call
+- Search results are already extracted text; no need to webfetch again
 
-## webfetch — 抓取网页原文
+## webfetch — Fetch Web Page Content
 
-通过 Jina Reader API 抓取网页内容，返回干净的 Markdown 文本。
+Fetch web page content via the Jina Reader API, returning clean Markdown text.
 
-**使用场景：**
-- 深度阅读 HN 帖子链接的原文
-- 获取 GitHub 仓库的 README
-- 阅读博客文章全文
+**Use cases:**
+- Deep-read the original article linked in an HN post
+- Retrieve a GitHub repository's README
+- Read a blog post in full
 
-**注意：**
-- 对 JS 重度渲染的页面效果可能不好
-- 返回内容可能很长，重点看前 2000 字即可
-- 如果原文是付费墙内容，可能只能获取摘要
+**Notes:**
+- May not work well on JS-heavy rendered pages
+- Returned content can be lengthy; focus on the first 2000 characters
+- If the original is behind a paywall, only a summary may be available

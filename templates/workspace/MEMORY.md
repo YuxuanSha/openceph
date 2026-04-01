@@ -1,21 +1,13 @@
-# MEMORY.md — 用户长期记忆
+# MEMORY.md — User Long-Term Memory
 
-## 用户基础（稳定）
-<!-- mem:2026-03-01-001 -->
-- 在做 OpenCeph，一个主动式 AI 个人操作系统
-- 技术选型：TypeScript + Pi 框架，触手多语言
+## User Basics (Stable)
+- No long-term memory recorded yet.
 
-## 近期重要事件
-<!-- mem:2026-03-18-001 -->
-- [2026-03-18] 完成 PRD v3 设计，确认引入 Pi 框架和 Gateway 层
+## Recent Important Events
+- No important events recorded yet.
 
-## 用户偏好（已验证）
-<!-- mem:2026-03-10-002 -->
-- 不喜欢框架堆砌，偏好第一性原理
-- 每天早上 9-10 点是阅读新内容的最佳时机
-- 觉得竞品分析很有价值，AI 产品动态要及时推送
+## User Preferences (Verified)
+- No verified preferences recorded yet.
 
-## 触手相关
-<!-- mem:2026-03-18-003 -->
-- t_ai_monitor 孵化，Product Hunt 监控已验证有价值
-- 每天 AI 产品动态推送不超过 3 条
+## Tentacle-Related
+- No tentacle-related memory recorded yet.

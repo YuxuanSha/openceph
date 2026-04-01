@@ -11,16 +11,16 @@ export function createWebTools(): ToolRegistryEntry[] {
   const webSearch: ToolDefinition = {
     name: "web_search",
     label: "Web Search",
-    description: "搜索互联网公开信息。注意：不要用来搜索 OpenCeph 内部系统问题（部署失败、触手错误等），这些互联网上搜不到。",
-    promptSnippet: "web_search — 搜索网页（DuckDuckGo），结果缓存 15 分钟",
+    description: "Search publicly available information on the internet. Note: do not use this to search for OpenCeph internal system issues (deployment failures, tentacle errors, etc.) — these are not findable on the internet.",
+    promptSnippet: "web_search — search the web (DuckDuckGo), results cached for 15 minutes",
     promptGuidelines: [
-      "当用户说「帮我搜一下」「搜索」「查一下」「找一下」时，调用 web_search 工具。",
-      "将搜索结果直接在回复中总结给用户，不要调用 send_to_user。",
-      "如果上下文中没有搜索结果，不要声称已经搜过了，必须实际调用 web_search。",
+      "When the user says 'help me search', 'search for', 'look up', or 'find', call the web_search tool.",
+      "Summarize search results directly in your reply to the user; do not call send_to_user.",
+      "If there are no search results in context, do not claim you have already searched — you must actually call web_search.",
     ],
     parameters: Type.Object({
-      query: Type.String({ description: "搜索关键词" }),
-      max_results: Type.Optional(Type.Number({ description: "最多返回结果数（默认 5）" })),
+      query: Type.String({ description: "Search keywords" }),
+      max_results: Type.Optional(Type.Number({ description: "Maximum number of results to return (default 5)" })),
     }),
     async execute(_id, params: any) {
       const query: string = params.query
@@ -77,11 +77,11 @@ export function createWebTools(): ToolRegistryEntry[] {
   const webFetch: ToolDefinition = {
     name: "web_fetch",
     label: "Web Fetch",
-    description: "抓取指定 URL 的网页内容（纯文本）",
-    promptSnippet: "web_fetch — 抓取指定 URL 的网页内容",
+    description: "Fetch the content of a specified URL as plain text",
+    promptSnippet: "web_fetch — fetch the content of a specified URL",
     parameters: Type.Object({
-      url: Type.String({ description: "要抓取的 URL" }),
-      max_length: Type.Optional(Type.Number({ description: "最大返回字符数（默认 5000）" })),
+      url: Type.String({ description: "The URL to fetch" }),
+      max_length: Type.Optional(Type.Number({ description: "Maximum number of characters to return (default 5000)" })),
     }),
     async execute(_id, params: any) {
       const url: string = params.url

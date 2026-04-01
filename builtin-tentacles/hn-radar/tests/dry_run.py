@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-hn-radar 部署验证脚本。
-在 tentacle 目录下运行：venv/bin/python tests/dry_run.py
+hn-radar deployment verification script.
+Run from the tentacle directory: venv/bin/python tests/dry_run.py
 """
 
 import subprocess

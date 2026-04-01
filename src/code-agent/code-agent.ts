@@ -222,7 +222,7 @@ export class CodeAgent {
     })
   }
 
-  // ── M4: Scene 1 — Deploy existing skill_tentacle (minimal prompt) ──
+  // ── Deploy existing skill_tentacle (minimal prompt) ──
 
   async deployExisting(tentacleDir: string, options?: { brief?: string }): Promise<CodeAgentSessionArtifact> {
     const customizeSection = options?.brief
@@ -256,7 +256,7 @@ managed by OpenCeph's TentacleManager after deployment.`
     }
   }
 
-  // ── M4: Scene 2 — Generate complete skill_tentacle from scratch ──
+  // ── Generate complete skill_tentacle from scratch ──
 
   async generateSkillTentacle(req: Omit<CodeAgentRequirement, "skillContext">): Promise<CodeAgentSessionArtifact> {
     const spec = await readPrompt("skill-tentacle-spec.md").catch(() => "")
@@ -284,7 +284,7 @@ Purpose: ${req.purpose}
 Runtime: ${req.preferredRuntime}
 
 ## Task Brief
-${req.brief || "（无额外说明，根据 purpose 自行决定工作流、数据源和上报策略）"}
+${req.brief || "(No additional instructions; determine workflow, data sources, and reporting strategy based on purpose)"}
 
 ## User Context
 ${req.userContext}
@@ -320,8 +320,8 @@ After generating all files, verify syntax with:
       await fs.mkdir(path.join(workDir, "prompt"), { recursive: true })
       await fs.mkdir(path.join(workDir, "src"), { recursive: true })
       await fs.writeFile(path.join(workDir, "SKILL.md"), `---\nname: ${req.tentacleId}\ndescription: ${req.purpose}\nversion: 1.0.0\nmetadata:\n  openceph:\n    tentacle:\n      spawnable: true\n      runtime: python\n      entry: src/main.py\n      default_trigger: every 30 minutes\n---\n`)
-      await fs.writeFile(path.join(workDir, "README.md"), `# ${req.tentacleId}\n\n## 环境变量\n\n## 部署步骤\n\n## 启动命令\npython3 src/main.py\n`)
-      await fs.writeFile(path.join(workDir, "prompt", "SYSTEM.md"), `# You are ${req.tentacleId}, a tentacle for {USER_NAME}.\n\n## Mission\n${req.purpose}\n\n## Brief\n${req.brief || "按 purpose 自行决定工作方式"}\n`)
+      await fs.writeFile(path.join(workDir, "README.md"), `# ${req.tentacleId}\n\n## Environment Variables\n\n## Deployment Steps\n\n## Start Command\npython3 src/main.py\n`)
+      await fs.writeFile(path.join(workDir, "prompt", "SYSTEM.md"), `# You are ${req.tentacleId}, a tentacle for {USER_NAME}.\n\n## Mission\n${req.purpose}\n\n## Brief\n${req.brief || "Determine working method based on purpose"}\n`)
       await fs.writeFile(path.join(workDir, "src", "main.py"), `import os\nimport sys\nTENTACLE_ID = os.environ.get("OPENCEPH_TENTACLE_ID", "${req.tentacleId}")\nTRIGGER_MODE = os.environ.get("OPENCEPH_TRIGGER_MODE", "self")\nprint("Emergency fallback skill_tentacle", file=sys.stderr)\n`)
       await fs.writeFile(path.join(workDir, "src", "requirements.txt"), "requests==2.31.0\npython-dotenv==1.0.0\n")
       return buildEmergencySessionArtifact(sessionFile, workDir, this.config.logging?.logDir ?? path.join(os.homedir(), ".openceph", "logs"))
@@ -345,7 +345,7 @@ After generating all files, verify syntax with:
     }
   }
 
-  // ── M4: Scene 2 — Fix generated skill_tentacle ──
+  // ── Fix generated skill_tentacle ──
 
   async fixSkillTentacle(
     tentacleDir: string,
@@ -846,7 +846,7 @@ Do NOT introduce new issues while fixing existing ones.`
 
       proc.on("error", async (error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") {
-          await fail(new Error("Claude Code CLI 未安装。请运行 'npm install -g @anthropic-ai/claude-code' 并执行 'claude login'。"))
+          await fail(new Error("Claude Code CLI is not installed. Run 'npm install -g @anthropic-ai/claude-code' and execute 'claude login'."))
           return
         }
         await fail(error)
@@ -884,7 +884,7 @@ Do NOT introduce new issues while fixing existing ones.`
             return
           }
           await fail(new CodeAgentProcessError(
-            `Claude Code 退出码 ${code}: ${(stderr || stdoutBuffer).trim().slice(-500) || "unknown error"}`,
+            `Claude Code exit code ${code}: ${(stderr || stdoutBuffer).trim().slice(-500) || "unknown error"}`,
             { exitCode: code, sessionFile },
           ))
           return
@@ -1053,7 +1053,7 @@ Do NOT introduce new issues while fixing existing ones.`
             }
           }, polling.killGraceMs)
           void fail(new CodeAgentTimeoutError(
-            `Claude Code 连续 ${Math.round(warningElapsedMs / 1000)}s 无新输出，已终止。总耗时 ${Math.round(elapsed / 1000)}s`,
+            `Claude Code had no new output for ${Math.round(warningElapsedMs / 1000)}s and was terminated. Total elapsed: ${Math.round(elapsed / 1000)}s`,
             { turnCount, elapsedMs: elapsed, sessionFile },
           ))
           return
@@ -1153,7 +1153,7 @@ Do NOT introduce new issues while fixing existing ones.`
         `Purpose: ${requirement.purpose}`,
         "",
         "Task Brief:",
-        requirement.brief || "（无额外说明，根据 purpose 自行决定工作流、数据源和上报策略）",
+        requirement.brief || "(No additional instructions; determine workflow, data sources, and reporting strategy based on purpose)",
         "",
         `User Context: ${requirement.userContext || "(empty)"}`,
       ].join("\n"),

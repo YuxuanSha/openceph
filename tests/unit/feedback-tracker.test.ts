@@ -105,21 +105,21 @@ describe("PushFeedbackTracker", () => {
 
 describe("detectFeedbackSignal", () => {
   it("detects positive signals", () => {
-    expect(detectFeedbackSignal("谢谢，很有用")).toBe("positive")
-    expect(detectFeedbackSignal("好的收到")).toBe("positive")
+    expect(detectFeedbackSignal("Thanks, very helpful")).toBe("positive")
+    expect(detectFeedbackSignal("Got it, thanks")).toBe("positive")
     expect(detectFeedbackSignal("Thanks!")).toBe("positive")
     expect(detectFeedbackSignal("👍")).toBe("positive")
   })
 
   it("detects negative signals", () => {
-    expect(detectFeedbackSignal("没用")).toBe("negative")
-    expect(detectFeedbackSignal("不要再发了")).toBe("negative")
+    expect(detectFeedbackSignal("Useless")).toBe("negative")
+    expect(detectFeedbackSignal("Don't send this anymore")).toBe("negative")
     expect(detectFeedbackSignal("Stop sending")).toBe("negative")
     expect(detectFeedbackSignal("👎")).toBe("negative")
   })
 
   it("returns null for neutral messages", () => {
     expect(detectFeedbackSignal("Tell me more")).toBeNull()
-    expect(detectFeedbackSignal("你好")).toBeNull()
+    expect(detectFeedbackSignal("Hello")).toBeNull()
   })
 })

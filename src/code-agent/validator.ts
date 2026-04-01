@@ -32,7 +32,7 @@ export class TentacleValidator {
   }
 
   /**
-   * M4: Validate a skill_tentacle directory on disk.
+   * Validate a skill_tentacle directory on disk.
    * Runs structure + syntax + contract + security + smoke checks.
    */
   async validateSkillTentacle(target: string): Promise<ValidationResult> {
@@ -90,7 +90,7 @@ export class TentacleValidator {
   }
 
   /**
-   * M4: Structure completeness check for skill_tentacle directories.
+   * Structure completeness check for skill_tentacle directories.
    */
   async structureCheck(dir: string): Promise<CheckResult> {
     const errors: ValidationError[] = []
@@ -103,7 +103,7 @@ export class TentacleValidator {
       try {
         await fs.access(fullPath)
       } catch {
-        errors.push({ check: "structure" as any, message: `必须文件缺失：${f}` })
+        errors.push({ check: "structure" as any, message: `Required file missing: ${f}` })
       }
     }
 
@@ -111,10 +111,10 @@ export class TentacleValidator {
     try {
       const srcStat = await fs.stat(path.join(dir, "src"))
       if (!srcStat.isDirectory()) {
-        errors.push({ check: "structure" as any, message: "src/ 不是目录" })
+        errors.push({ check: "structure" as any, message: "src/ is not a directory" })
       }
     } catch {
-      errors.push({ check: "structure" as any, message: "src/ 目录缺失" })
+      errors.push({ check: "structure" as any, message: "src/ directory missing" })
     }
 
     // SKILL.md frontmatter semantic check via SkillInspector (deep YAML parsing)
@@ -122,7 +122,7 @@ export class TentacleValidator {
       if (!SkillInspector.isSkillTentacle(dir)) {
         errors.push({
           check: "structure" as any,
-          message: "SKILL.md frontmatter 缺少 metadata.openceph.tentacle.spawnable: true（或缺少 prompt/SYSTEM.md / src/ / README.md）",
+          message: "SKILL.md frontmatter missing metadata.openceph.tentacle.spawnable: true (or missing prompt/SYSTEM.md / src/ / README.md)",
         })
       }
     } catch {
@@ -132,11 +132,11 @@ export class TentacleValidator {
     // README.md content check
     try {
       const readme = await fs.readFile(path.join(dir, "README.md"), "utf-8")
-      if (!readme.includes("环境变量") && !readme.includes("Environment") && !readme.includes("env")) {
-        warnings.push("README.md 缺少环境变量章节")
+      if (!readme.includes("Environment") && !readme.includes("env") && !readme.includes("Variables")) {
+        warnings.push("README.md missing environment variables section")
       }
-      if (!readme.includes("部署") && !readme.includes("Deploy") && !readme.includes("Setup") && !readme.includes("Install")) {
-        warnings.push("README.md 缺少部署步骤章节")
+      if (!readme.includes("Deploy") && !readme.includes("Setup") && !readme.includes("Install") && !readme.includes("## ")) {
+        warnings.push("README.md missing deployment steps section")
       }
     } catch {
       // README.md missing already reported above
@@ -146,7 +146,7 @@ export class TentacleValidator {
     try {
       const systemMd = await fs.readFile(path.join(dir, "prompt", "SYSTEM.md"), "utf-8")
       if (systemMd.trim().length < 50) {
-        errors.push({ check: "structure" as any, message: "prompt/SYSTEM.md 内容过短（< 50 字符）" })
+        errors.push({ check: "structure" as any, message: "prompt/SYSTEM.md content too short (< 50 characters)" })
       }
     } catch {
       // Already reported above
@@ -218,7 +218,7 @@ export class TentacleValidator {
       errors.push({
         check: "contract",
         message: "Missing IPC transport implementation — tentacle must communicate over stdin/stdout JSON Lines",
-        suggestion: "Write JSON lines to stdout and read directives from stdin (legacy socket compatibility is optional)",
+        suggestion: "Write JSON lines to stdout and read directives from stdin (socket compatibility is optional)",
       })
     }
 

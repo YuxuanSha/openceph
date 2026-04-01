@@ -1,7 +1,7 @@
-# TENTACLES.md — 触手注册表
+# TENTACLES.md — Tentacle Registry
 
-## 运行中的触手
-（无）
+## Running Tentacles
+(None)
 
-## 已停用的触手
-（无）
+## Deactivated Tentacles
+(None)

@@ -71,6 +71,6 @@ describe("integration: strengthen flow", () => {
     expect(manager.spawn).toHaveBeenCalledWith(tentacleId)
     expect(fs.readFileSync(path.join(tentacleDir, "main.py"), "utf-8")).toContain("OpenCeph upgrade")
     expect(fs.readFileSync(path.join(tentacleDir, "UPGRADE_NOTES.md"), "utf-8")).toContain("Prioritize urgent RSS items")
-    expect(registry.updateStatus).toHaveBeenLastCalledWith(tentacleId, "running", { health: "良好" })
+    expect(registry.updateStatus).toHaveBeenLastCalledWith(tentacleId, "running", { health: "good" })
   }, 20_000)
 })

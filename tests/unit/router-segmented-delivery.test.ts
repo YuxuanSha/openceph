@@ -27,7 +27,7 @@ describe("ChannelRouter delivery", () => {
     const brain = {
       handleMessage: vi.fn(async () => {
         return {
-          text: "第一段第二段\n\n---\n📬 **触手动态：**\n补充内容",
+          text: "First paragraphSecond paragraph\n\n---\n📬 **Tentacle Updates:**\nAdditional content",
           toolCalls: [],
           inputTokens: 0,
           outputTokens: 0,
@@ -74,7 +74,7 @@ describe("ChannelRouter delivery", () => {
     expect(send).toHaveBeenCalledTimes(1)
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "feishu", senderId: "feishu:ou_user", replyToId: "om_parent" }),
-      expect.objectContaining({ text: "第一段第二段\n\n---\n📬 **触手动态：**\n补充内容" }),
+      expect.objectContaining({ text: "First paragraphSecond paragraph\n\n---\n📬 **Tentacle Updates:**\nAdditional content" }),
     )
   })
 })

@@ -414,7 +414,7 @@ export class TentacleManager {
         lastReportAt: entry.lastReport,
         totalReports: 0,
         totalFindings: 0,
-        healthScore: entry.health === "崩溃" ? 0 : 100,
+        healthScore: entry.health === "crashed" ? 0 : 100,
         directory: entry.directory ?? this.getTentacleDir(entry.tentacleId),
         scheduleConfig,
       })
@@ -493,7 +493,7 @@ export class TentacleManager {
 
     if (restartAttempt >= this.config.tentacle.crashRestartMaxAttempts) {
       this.updateStatus(tentacleId, { status: "crashed", healthScore: 0 })
-      await this.registry.updateStatus(tentacleId, "crashed", { health: "崩溃" })
+      await this.registry.updateStatus(tentacleId, "crashed", { health: "crashed" })
       systemLogger.error("tentacle_crash_permanent", { tentacle_id: tentacleId })
       tentacleLog(tentacleId, "error", "tentacle_crash_permanent", { exit_code: exitCode })
       return
@@ -516,7 +516,7 @@ export class TentacleManager {
       await this.registry.updateStatus(tentacleId, "running", {
         purpose: payload.purpose ?? "",
         runtime: payload.runtime ?? "unknown",
-        health: "良好",
+        health: "good",
       })
       systemLogger.info("tentacle_registered", { tentacle_id: tentacleId, runtime: payload.runtime })
       return
@@ -739,7 +739,7 @@ export class TentacleManager {
       createdAt: current.createdAt,
       directory: current.directory,
       lastReport: current.lastReportAt,
-      health: current.healthScore > 0 ? "良好" : "崩溃",
+      health: current.healthScore > 0 ? "good" : "crashed",
       scheduleConfig: current.scheduleConfig ? JSON.stringify(current.scheduleConfig) : undefined,
     })
   }

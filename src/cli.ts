@@ -238,7 +238,7 @@ program
     console.log("Next steps:")
     console.log("  1. openceph credentials set openrouter <YOUR_API_KEY>")
     console.log("  2. openceph start  (verify config)")
-    console.log('  3. openceph chat   (M1 阶段可用)')
+    console.log('  3. openceph chat   (interactive chat)')
   })
 
 program
@@ -1169,13 +1169,13 @@ function parseTentaclesMd(content: string): { id: string; status: string; health
     let health: string | undefined
     let lastReport: string | undefined
 
-    const statusMatch = block.match(/(?:status:|- \*\*状态：\*\*)\s*(\S+)/)
+    const statusMatch = block.match(/(?:status:|- \*\*Status:\*\*)\s*(\S+)/)
     if (statusMatch) status = statusMatch[1]
 
-    const healthMatch = block.match(/(?:health:|- \*\*健康度：\*\*)\s*(\S+)/)
+    const healthMatch = block.match(/(?:health:|- \*\*Health:\*\*)\s*(\S+)/)
     if (healthMatch) health = healthMatch[1]
 
-    const reportMatch = block.match(/(?:lastReport:|- \*\*最后上报：\*\*)\s*(.+)/)
+    const reportMatch = block.match(/(?:lastReport:|- \*\*Last Report:\*\*)\s*(.+)/)
     if (reportMatch) lastReport = reportMatch[1].trim()
 
     results.push({ id, status, health, lastReport })
@@ -1446,7 +1446,7 @@ async function runDoctorChecks(fix: boolean): Promise<DoctorIssue[]> {
   } else {
     issues.push({ check: "Tentacles", status: "warn", message: `${crashed.length} crashed: ${crashed.map((t) => t.id).join(", ")}`, fixable: true })
     if (fix) {
-      const next = readFileSync(tentaclesPath, "utf-8").replace(/\*\*状态：\*\* crashed/g, "**状态：** running")
+      const next = readFileSync(tentaclesPath, "utf-8").replace(/\*\*Status:\*\* crashed/g, "**Status:** running")
       await fs.writeFile(tentaclesPath, next, "utf-8")
       issues[issues.length - 1] = { check: "Tentacles", status: "ok", message: `recovered ${crashed.length} tentacle record(s)` }
     }

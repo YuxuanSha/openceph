@@ -1,8 +1,8 @@
 ---
 name: template-monitor
 description: |
-  模板触手 — 替换此描述为你的触手目的。
-  当用户想要{你的触手功能}时孵化此触手。
+  Template tentacle — replace this description with your tentacle's purpose.
+  Spawn this tentacle when the user wants {your tentacle's functionality}.
 version: 1.0.0
 
 metadata:
@@ -10,8 +10,8 @@ metadata:
     emoji: "🔮"
     category: "monitoring"
     trigger_keywords:
-      - "替换为关键词1"
-      - "替换为关键词2"
+      - "replace with keyword 1"
+      - "replace with keyword 2"
 
     tentacle:
       spawnable: true
@@ -45,15 +45,15 @@ metadata:
 
       customizable:
         - field: "topics"
-          description: "关注的主题（逗号分隔）"
+          description: "Topics of interest (comma-separated)"
           env_var: "MONITOR_TOPICS"
           default: "AI,LLM,agent"
         - field: "quality_bar"
-          description: "内容质量判断标准"
+          description: "Content quality judgment criteria"
           prompt_placeholder: "{QUALITY_CRITERIA}"
-          default: "有实际价值，不是纯新闻或广告"
+          default: "Has practical value, not pure news or advertisements"
 ---
 
 # Template Monitor
 
-替换此内容为你的触手说明。
+Replace this content with your tentacle's description.
