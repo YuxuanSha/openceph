@@ -137,7 +137,7 @@ export class MemoryManager {
     return this.searchEngine.search(query, options)
   }
 
-  /** Distill daily log into MEMORY.md (M1: simple append, M2: LLM-assisted) */
+  /** Distill daily log into MEMORY.md. Supports simple append or LLM-assisted distillation. */
   async distillMemory(date?: string, distiller?: MemoryDistiller): Promise<void> {
     const targetDate = date ?? (() => {
       const d = new Date()
@@ -155,7 +155,7 @@ export class MemoryManager {
     try {
       memoryContent = await fs.readFile(this.memoryMdPath, "utf-8")
     } catch {
-      memoryContent = "# MEMORY.md — 用户长期记忆\n"
+      memoryContent = "# MEMORY.md — Long-term User Memory\n"
     }
 
     const distilled = distiller

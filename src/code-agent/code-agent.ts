@@ -21,20 +21,7 @@ const __dirname = path.dirname(__filename)
 export interface CodeAgentRequirement {
   tentacleId: string
   purpose: string
-  workflow: string
-  capabilities: TentacleCapability[]
-  reportStrategy: string
-  infrastructure?: {
-    needsHttpServer?: boolean
-    needsDatabase?: boolean
-    needsExternalBot?: {
-      platform: "feishu" | "telegram" | "discord"
-      purpose: string
-    }
-    needsLlm?: boolean
-    needsFileStorage?: boolean
-  }
-  externalApis?: string[]
+  brief: string
   preferredRuntime: "python" | "typescript" | "go" | "shell" | "auto"
   skillContext?: {
     skillMd: string
@@ -235,22 +222,18 @@ export class CodeAgent {
     })
   }
 
-  // ── M4: Scene 1 — Deploy existing skill_tentacle (minimal prompt) ──
+  // ── Deploy existing skill_tentacle (minimal prompt) ──
 
-  async deployExisting(tentacleDir: string): Promise<CodeAgentSessionArtifact> {
-    const prompt = `You are deploying a pre-built tentacle agent for OpenCeph.
+  async deployExisting(tentacleDir: string, options?: { brief?: string }): Promise<CodeAgentSessionArtifact> {
+    const customizeSection = options?.brief
+      ? `\n\n## Customization Request\nThe user wants modifications to this tentacle. Here is what they need:\n\n${options.brief}\n\nYou should:\n1. Read README.md and understand the existing codebase first\n2. Make the requested changes to the business logic in src/\n3. Preserve the IPC communication skeleton and three-layer architecture\n4. Follow the deployment steps after making changes\n5. Run --dry-run if available to verify your changes work`
+      : `\n\nInstructions:\n1. Read README.md in this directory — it contains all deployment steps\n2. Follow the deployment steps exactly as described\n3. If you encounter environment issues (wrong Python version, missing system packages,\n   pip install failures), fix them and continue\n4. Do NOT modify files in src/ or prompt/ directories\n5. After setup, optionally run the --dry-run command if README.md describes one\n6. Report success or failure with details`
+    const prompt = `You are deploying a ${options?.brief ? "customized" : "pre-built"} tentacle agent for OpenCeph.
 
 Working directory: ${tentacleDir}
+${customizeSection}
 
-Instructions:
-1. Read README.md in this directory — it contains all deployment steps
-2. Follow the deployment steps exactly as described
-3. If you encounter environment issues (wrong Python version, missing system packages,
-   pip install failures), fix them and continue
-4. Do NOT modify files in src/ or prompt/ directories
-5. After setup, optionally run the --dry-run command if README.md describes one
-6. Report success or failure with details
-7. Never claim the tentacle is already running/spawned unless you actually started it yourself in this session
+Never claim the tentacle is already running/spawned unless you actually started it yourself in this session.
 
 The tentacle implements the OpenCeph IPC contract and will be
 managed by OpenCeph's TentacleManager after deployment.`
@@ -273,7 +256,7 @@ managed by OpenCeph's TentacleManager after deployment.`
     }
   }
 
-  // ── M4: Scene 2 — Generate complete skill_tentacle from scratch ──
+  // ── Generate complete skill_tentacle from scratch ──
 
   async generateSkillTentacle(req: Omit<CodeAgentRequirement, "skillContext">): Promise<CodeAgentSessionArtifact> {
     const spec = await readPrompt("skill-tentacle-spec.md").catch(() => "")
@@ -298,12 +281,10 @@ ${ipcTemplate}
 
 ## Generation Requirements
 Purpose: ${req.purpose}
-Workflow: ${req.workflow}
-Capabilities: ${req.capabilities?.join(", ") ?? "auto-determine"}
-Report Strategy: ${req.reportStrategy ?? "积攒有价值信息后批量上报大脑"}
 Runtime: ${req.preferredRuntime}
-Infrastructure: ${JSON.stringify(req.infrastructure ?? {})}
-External APIs: ${req.externalApis?.join(", ") ?? "none"}
+
+## Task Brief
+${req.brief || "(No additional instructions; determine workflow, data sources, and reporting strategy based on purpose)"}
 
 ## User Context
 ${req.userContext}
@@ -339,8 +320,8 @@ After generating all files, verify syntax with:
       await fs.mkdir(path.join(workDir, "prompt"), { recursive: true })
       await fs.mkdir(path.join(workDir, "src"), { recursive: true })
       await fs.writeFile(path.join(workDir, "SKILL.md"), `---\nname: ${req.tentacleId}\ndescription: ${req.purpose}\nversion: 1.0.0\nmetadata:\n  openceph:\n    tentacle:\n      spawnable: true\n      runtime: python\n      entry: src/main.py\n      default_trigger: every 30 minutes\n---\n`)
-      await fs.writeFile(path.join(workDir, "README.md"), `# ${req.tentacleId}\n\n## 环境变量\n\n## 部署步骤\n\n## 启动命令\npython3 src/main.py\n`)
-      await fs.writeFile(path.join(workDir, "prompt", "SYSTEM.md"), `# You are ${req.tentacleId}, a tentacle for {USER_NAME}.\n\n## Mission\n${req.purpose}\n\n## Report Strategy\n${req.reportStrategy ?? "Batch report"}\n`)
+      await fs.writeFile(path.join(workDir, "README.md"), `# ${req.tentacleId}\n\n## Environment Variables\n\n## Deployment Steps\n\n## Start Command\npython3 src/main.py\n`)
+      await fs.writeFile(path.join(workDir, "prompt", "SYSTEM.md"), `# You are ${req.tentacleId}, a tentacle for {USER_NAME}.\n\n## Mission\n${req.purpose}\n\n## Brief\n${req.brief || "Determine working method based on purpose"}\n`)
       await fs.writeFile(path.join(workDir, "src", "main.py"), `import os\nimport sys\nTENTACLE_ID = os.environ.get("OPENCEPH_TENTACLE_ID", "${req.tentacleId}")\nTRIGGER_MODE = os.environ.get("OPENCEPH_TRIGGER_MODE", "self")\nprint("Emergency fallback skill_tentacle", file=sys.stderr)\n`)
       await fs.writeFile(path.join(workDir, "src", "requirements.txt"), "requests==2.31.0\npython-dotenv==1.0.0\n")
       return buildEmergencySessionArtifact(sessionFile, workDir, this.config.logging?.logDir ?? path.join(os.homedir(), ".openceph", "logs"))
@@ -364,7 +345,7 @@ After generating all files, verify syntax with:
     }
   }
 
-  // ── M4: Scene 2 — Fix generated skill_tentacle ──
+  // ── Fix generated skill_tentacle ──
 
   async fixSkillTentacle(
     tentacleDir: string,
@@ -446,9 +427,7 @@ Do NOT introduce new issues while fixing existing ones.`
       return this.runGeneratedCode(prompt, {
         tentacleId: mergeRequirement.newTentacleId,
         purpose: mergeRequirement.newPurpose,
-        workflow: "Merged workflow from source tentacles",
-        capabilities: [],
-        reportStrategy: "Report merged findings using consultation sessions",
+        brief: "Merged workflow from source tentacles. Report merged findings using consultation sessions.",
         preferredRuntime: runtime as CodeAgentRequirement["preferredRuntime"],
         userContext: "",
       }, runtime, "merge", sessionFile)
@@ -867,7 +846,7 @@ Do NOT introduce new issues while fixing existing ones.`
 
       proc.on("error", async (error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") {
-          await fail(new Error("Claude Code CLI 未安装。请运行 'npm install -g @anthropic-ai/claude-code' 并执行 'claude login'。"))
+          await fail(new Error("Claude Code CLI is not installed. Run 'npm install -g @anthropic-ai/claude-code' and execute 'claude login'."))
           return
         }
         await fail(error)
@@ -905,7 +884,7 @@ Do NOT introduce new issues while fixing existing ones.`
             return
           }
           await fail(new CodeAgentProcessError(
-            `Claude Code 退出码 ${code}: ${(stderr || stdoutBuffer).trim().slice(-500) || "unknown error"}`,
+            `Claude Code exit code ${code}: ${(stderr || stdoutBuffer).trim().slice(-500) || "unknown error"}`,
             { exitCode: code, sessionFile },
           ))
           return
@@ -1074,7 +1053,7 @@ Do NOT introduce new issues while fixing existing ones.`
             }
           }, polling.killGraceMs)
           void fail(new CodeAgentTimeoutError(
-            `Claude Code 连续 ${Math.round(warningElapsedMs / 1000)}s 无新输出，已终止。总耗时 ${Math.round(elapsed / 1000)}s`,
+            `Claude Code had no new output for ${Math.round(warningElapsedMs / 1000)}s and was terminated. Total elapsed: ${Math.round(elapsed / 1000)}s`,
             { turnCount, elapsedMs: elapsed, sessionFile },
           ))
           return
@@ -1173,11 +1152,9 @@ Do NOT introduce new issues while fixing existing ones.`
         "Section 3: Requirement",
         `Purpose: ${requirement.purpose}`,
         "",
-        "Workflow:",
-        requirement.workflow,
+        "Task Brief:",
+        requirement.brief || "(No additional instructions; determine workflow, data sources, and reporting strategy based on purpose)",
         "",
-        `Report Strategy: ${requirement.reportStrategy}`,
-        `Capabilities: ${requirement.capabilities.join(", ") || "(none specified)"}`,
         `User Context: ${requirement.userContext || "(empty)"}`,
       ].join("\n"),
       [
@@ -1189,27 +1166,6 @@ Do NOT introduce new issues while fixing existing ones.`
         langTemplate,
       ].join("\n"),
     ]
-
-    if (requirement.infrastructure) {
-      sections.push([
-        "Section 6: Infrastructure",
-        requirement.infrastructure.needsLlm ? "- Needs LLM calls (use OPENCEPH_LLM_API_KEY / OPENCEPH_LLM_BASE_URL / OPENCEPH_LLM_MODEL from env; OPENROUTER_* is legacy compatibility only)" : "",
-        requirement.infrastructure.needsDatabase ? "- Needs local SQLite or file database" : "",
-        requirement.infrastructure.needsHttpServer ? "- Needs an HTTP server or webhook listener" : "",
-        requirement.infrastructure.needsFileStorage ? "- Needs file-based state persistence" : "",
-        requirement.infrastructure.needsExternalBot
-          ? `- Needs independent ${requirement.infrastructure.needsExternalBot.platform} bot: ${requirement.infrastructure.needsExternalBot.purpose}`
-          : "",
-      ].filter(Boolean).join("\n"),
-      )
-    }
-
-    if (requirement.externalApis?.length) {
-      sections.push([
-        "Section 7: External APIs",
-        requirement.externalApis.join(", "),
-      ].join("\n"))
-    }
 
     if (requirement.skillContext) {
       sections.push([
@@ -1397,12 +1353,8 @@ Do NOT introduce new issues while fixing existing ones.`
       .update(JSON.stringify({
         tentacleId: requirement.tentacleId,
         purpose: requirement.purpose,
-        workflow: requirement.workflow,
-        capabilities: requirement.capabilities,
-        reportStrategy: requirement.reportStrategy,
+        brief: requirement.brief,
         preferredRuntime: requirement.preferredRuntime,
-        infrastructure: requirement.infrastructure,
-        externalApis: requirement.externalApis,
       }))
       .digest("hex")
   }
@@ -1694,20 +1646,19 @@ function inferDependencies(runtime: string, files: Array<{ path: string; content
   return target?.content
 }
 
-function inferEnvVars(requirement: CodeAgentRequirement): string[] {
-  const vars = ["OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"]
-  if (requirement.infrastructure?.needsLlm) {
-    vars.push(
-      "OPENCEPH_LLM_PROVIDER",
-      "OPENCEPH_LLM_API",
-      "OPENCEPH_LLM_BASE_URL",
-      "OPENCEPH_LLM_API_KEY",
-      "OPENCEPH_LLM_MODEL",
-      "OPENCEPH_LLM_FULL_MODEL",
-      "OPENCEPH_LLM_FALLBACKS_JSON",
-      "OPENCEPH_LLM_PARAMS_JSON",
-    )
-  }
+function inferEnvVars(_requirement: CodeAgentRequirement): string[] {
+  const vars = [
+    "OPENCEPH_TENTACLE_ID",
+    "OPENCEPH_TRIGGER_MODE",
+    "OPENCEPH_LLM_PROVIDER",
+    "OPENCEPH_LLM_API",
+    "OPENCEPH_LLM_BASE_URL",
+    "OPENCEPH_LLM_API_KEY",
+    "OPENCEPH_LLM_MODEL",
+    "OPENCEPH_LLM_FULL_MODEL",
+    "OPENCEPH_LLM_FALLBACKS_JSON",
+    "OPENCEPH_LLM_PARAMS_JSON",
+  ]
   return Array.from(new Set(vars))
 }
 
@@ -1763,7 +1714,7 @@ function emitConsultation(reason: string, mode: "batch" | "action_confirm" = "ba
     context: \`reason=\${reason}; trigger=\${triggerMode}\`,
     items: mode === "batch" ? [{
       id: "fallback-item",
-      content: ${JSON.stringify(requirement.workflow || requirement.purpose)},
+      content: ${JSON.stringify(requirement.brief || requirement.purpose)},
       tentacleJudgment: "important",
       reason: "OpenCeph emergency fallback",
       timestamp: new Date().toISOString(),
@@ -1850,7 +1801,7 @@ PAUSED = False
 TRIGGER_MODE = os.environ.get("OPENCEPH_TRIGGER_MODE", "external")
 TENTACLE_ID = os.environ.get("OPENCEPH_TENTACLE_ID", ${JSON.stringify(requirement.tentacleId)})
 PURPOSE = ${JSON.stringify(requirement.purpose)}
-WORKFLOW = ${JSON.stringify(requirement.workflow || requirement.purpose)}
+BRIEF = ${JSON.stringify(requirement.brief || requirement.purpose)}
 
 def send(msg_type, payload):
     sys.stdout.write(json.dumps({
@@ -1882,7 +1833,7 @@ def emit_consultation(reason, mode="batch"):
     else:
         payload["items"] = [{
             "id": "fallback-item",
-            "content": WORKFLOW,
+            "content": BRIEF,
             "tentacleJudgment": "important",
             "reason": "OpenCeph emergency fallback",
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

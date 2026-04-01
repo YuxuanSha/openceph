@@ -38,7 +38,7 @@ describe("send_to_user cross-session flow", () => {
 
     const result = await executeSendToUser(
       {
-        message: "📡 新发现",
+        message: "📡 New finding",
         timing: "immediate",
         channel: "last_active",
         priority: "urgent",
@@ -61,7 +61,7 @@ describe("send_to_user cross-session flow", () => {
     expect(transcript).toHaveLength(1)
     const entry = JSON.parse(transcript[0])
     expect(entry.role).toBe("assistant")
-    expect(entry.content).toBe("📡 新发现")
+    expect(entry.content).toBe("📡 New finding")
     expect(entry.metadata.source).toBe("tentacle_push")
     expect(entry.metadata.tentacleId).toBe("t_hn")
     expect(entry.metadata.consultationSessionId).toBe("consultation:abc")
@@ -73,7 +73,7 @@ describe("send_to_user cross-session flow", () => {
 
     await executeSendToUser(
       {
-        message: "正常主动消息",
+        message: "Normal proactive message",
         timing: "immediate",
         channel: "telegram",
       },
@@ -98,7 +98,7 @@ describe("send_to_user cross-session flow", () => {
 
     const result = await executeSendToUser(
       {
-        message: "晨报里再发",
+        message: "Send in morning digest",
         timing: "morning_digest",
         channel: "last_active",
         source_tentacles: ["t_digest"],

@@ -226,7 +226,9 @@ describe("TentaclePackager", () => {
       expect(info!.requires).toBeDefined()
       expect((info!.requires as any).bins).toContain("python3")
       expect((info!.requires as any).env).toContain("OPENAI_API_KEY")
-      expect(info!.capabilities).toBeInstanceOf(Array)
+      expect(info!.capabilities).toBeDefined()
+      expect((info!.capabilities as any).daemon).toBeInstanceOf(Array)
+      expect((info!.capabilities as any).consultation).toBeDefined()
       expect(info!.customizable).toBeInstanceOf(Array)
       expect(typeof info!.path).toBe("string")
     })
@@ -262,7 +264,7 @@ describe("TentaclePackager", () => {
       fs.mkdirSync(path.join(skillDir, "src"), { recursive: true })
       fs.writeFileSync(
         path.join(skillDir, "SKILL.md"),
-        "---\nname: block-list-test\ndescription: Block list parsing\nversion: 1.2.3\nmetadata:\n  openceph:\n    tentacle:\n      spawnable: true\n      runtime: python\n      entry: src/main.py\n      capabilities:\n        - api_integration\n        - llm_reasoning\n      requires:\n        bins:\n          - python3\n        env:\n          - OPENROUTER_API_KEY\n      customizable:\n        - field: WATCH_TOPIC\n          description: Topic to watch\n          prompt_placeholder: '{WATCH_TOPIC}'\n---\n",
+        "---\nname: block-list-test\ndescription: Block list parsing\nversion: 1.2.3\nmetadata:\n  openceph:\n    tentacle:\n      spawnable: true\n      runtime: python\n      entry: src/main.py\n      capabilities:\n        daemon:\n          - api_integration\n          - llm_reasoning\n        agent: []\n        consultation:\n          mode: batch\n          batchThreshold: 5\n      requires:\n        bins:\n          - python3\n        env:\n          - OPENROUTER_API_KEY\n      customizable:\n        - field: WATCH_TOPIC\n          description: Topic to watch\n          prompt_placeholder: '{WATCH_TOPIC}'\n---\n",
       )
       fs.writeFileSync(path.join(skillDir, "prompt", "SYSTEM.md"), "# Identity\nYou are block-list-test.\n\n# Mission\nTest block list parsing.")
       fs.writeFileSync(path.join(skillDir, "README.md"), "# readme\n")
@@ -274,7 +276,8 @@ describe("TentaclePackager", () => {
       expect(info).not.toBeNull()
       expect((info!.requires as any).bins).toContain("python3")
       expect((info!.requires as any).env).toContain("OPENROUTER_API_KEY")
-      expect(info!.capabilities).toEqual(["api_integration", "llm_reasoning"])
+      expect((info!.capabilities as any).daemon).toEqual(["api_integration", "llm_reasoning"])
+      expect((info!.capabilities as any).consultation).toEqual({ mode: "batch", batchThreshold: 5 })
       expect((info!.customizable as Array<{ type: string }>)[0]?.type).toBe("prompt_placeholder")
     })
 

@@ -16,6 +16,16 @@ export type TentacleCapabilityType =
   | "action_execution"
   | string
 
+/** Per protocol: three-layer structured capabilities object */
+export interface TentacleCapabilities {
+  daemon: string[]
+  agent: string[]
+  consultation: {
+    mode: string
+    batchThreshold?: number
+  }
+}
+
 export interface CustomizableField {
   field: string
   description: string
@@ -35,7 +45,7 @@ export interface SkillTentacleConfig {
     bins: string[]
     env: string[]
   }
-  capabilities: TentacleCapabilityType[]
+  capabilities: TentacleCapabilities
   infrastructure?: {
     needsDatabase?: boolean
     needsLlm?: boolean
@@ -61,7 +71,7 @@ export interface SkillEntry {
   triggerKeywords?: string[]
   emoji?: string
 
-  // M4 skill_tentacle fields
+  // skill_tentacle fields
   isSkillTentacle: boolean
   skillTentacleConfig?: SkillTentacleConfig
 }
@@ -156,7 +166,7 @@ function parseSkillContent(content: string, skillDir: string): SkillEntry {
   const setupCommands = asStringArray(frontmatter.setup_commands)
   const requires = toStringRecord(frontmatter.requires)
 
-  // M4: Detect metadata.openceph.tentacle for skill_tentacle
+  // Detect metadata.openceph.tentacle for skill_tentacle
   const metadata = frontmatter.metadata as Record<string, unknown> | undefined
   const opencephMeta = metadata?.openceph as Record<string, unknown> | undefined
   const tentacleMeta = opencephMeta?.tentacle as Record<string, unknown> | undefined
@@ -184,7 +194,7 @@ function parseSkillContent(content: string, skillDir: string): SkillEntry {
     const tRequires = tentacleMeta.requires
       ? toStringRecord(tentacleMeta.requires)
       : requires
-    const tCapabilities = asStringArray(tentacleMeta.capabilities)
+    const tCapabilities = parseCapabilities(tentacleMeta.capabilities)
     const tInfra = tentacleMeta.infrastructure as Record<string, unknown> | undefined
     const tCustomizable = parseCustomizableFields(tentacleMeta.customizable)
 
@@ -418,6 +428,35 @@ function asStringArray(value: unknown): string[] {
     return value.split(",").map((item) => item.trim()).filter(Boolean)
   }
   return []
+}
+
+/** Parse capabilities as structured three-layer object per protocol spec. */
+function parseCapabilities(value: unknown): TentacleCapabilities {
+  const defaultCaps: TentacleCapabilities = {
+    daemon: [],
+    agent: [],
+    consultation: { mode: "batch" },
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return defaultCaps
+  }
+  const obj = value as Record<string, unknown>
+  const consultation = obj.consultation
+  let consultationParsed: TentacleCapabilities["consultation"] = { mode: "batch" }
+  if (consultation && typeof consultation === "object" && !Array.isArray(consultation)) {
+    const c = consultation as Record<string, unknown>
+    const rawThreshold = c.batchThreshold ?? c.batch_threshold
+    const threshold = rawThreshold != null ? Number(rawThreshold) : undefined
+    consultationParsed = {
+      mode: typeof c.mode === "string" ? c.mode : "batch",
+      ...(threshold != null && !isNaN(threshold) ? { batchThreshold: threshold } : {}),
+    }
+  }
+  return {
+    daemon: asStringArray(obj.daemon),
+    agent: asStringArray(obj.agent),
+    consultation: consultationParsed,
+  }
 }
 
 function toStringRecord(value: unknown): { bins: string[]; env: string[] } {

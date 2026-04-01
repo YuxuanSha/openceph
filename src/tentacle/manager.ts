@@ -8,6 +8,9 @@ import { buildTentacleModelEnv } from "../config/model-runtime.js"
 import { brainLogger, systemLogger, tentacleLog } from "../logger/index.js"
 import { updateRuntimeStatus } from "../logger/runtime-status-store.js"
 import type {
+  ConsultationClosePayload,
+  ConsultationEndPayload,
+  ConsultationMessagePayload,
   ConsultationReplyPayload,
   ConsultationRequestPayload,
   DirectivePayload,
@@ -16,7 +19,10 @@ import type {
   IpcMessage,
   ReportFindingPayload,
   TentacleRegisterPayload,
+  ToolRequestPayload,
+  ToolResultPayload,
 } from "./contract.js"
+import { createIpcMessage } from "./contract.js"
 import { IpcServer } from "./ipc-server.js"
 import { PendingReportsQueue } from "./pending-reports.js"
 import { TentacleRegistry } from "./registry.js"
@@ -73,6 +79,18 @@ export class TentacleManager {
     adjustment: NonNullable<HeartbeatResultPayload["adjustments"]>[number]
     currentSchedule: TentacleScheduleConfig | null
   }) => Promise<boolean>) | null = null
+  private toolRequestHandler: ((input: {
+    tentacleId: string
+    payload: ToolRequestPayload
+  }) => Promise<ToolResultPayload>) | null = null
+  private consultationMessageHandler: ((input: {
+    tentacleId: string
+    payload: ConsultationMessagePayload
+  }) => Promise<void>) | null = null
+  private consultationEndHandler: ((input: {
+    tentacleId: string
+    payload: ConsultationEndPayload
+  }) => Promise<void>) | null = null
 
   constructor(
     private config: OpenCephConfig,
@@ -110,6 +128,33 @@ export class TentacleManager {
     }) => Promise<boolean>,
   ): void {
     this.adjustmentHandler = handler
+  }
+
+  setToolRequestHandler(
+    handler: (input: {
+      tentacleId: string
+      payload: ToolRequestPayload
+    }) => Promise<ToolResultPayload>,
+  ): void {
+    this.toolRequestHandler = handler
+  }
+
+  setConsultationMessageHandler(
+    handler: (input: {
+      tentacleId: string
+      payload: ConsultationMessagePayload
+    }) => Promise<void>,
+  ): void {
+    this.consultationMessageHandler = handler
+  }
+
+  setConsultationEndHandler(
+    handler: (input: {
+      tentacleId: string
+      payload: ConsultationEndPayload
+    }) => Promise<void>,
+  ): void {
+    this.consultationEndHandler = handler
   }
 
   async spawn(tentacleId: string): Promise<void> {
@@ -327,6 +372,14 @@ export class TentacleManager {
     }
   }
 
+  async sendConsultationReply(tentacleId: string, payload: ConsultationReplyPayload): Promise<void> {
+    await this.ipcServer.sendToTentacle(tentacleId, createIpcMessage("consultation_reply", tentacleId, payload))
+  }
+
+  async sendConsultationClose(tentacleId: string, payload: ConsultationClosePayload): Promise<void> {
+    await this.ipcServer.sendToTentacle(tentacleId, createIpcMessage("consultation_close", tentacleId, payload))
+  }
+
   async forwardConsultationDirective(tentacleId: string, payload: DirectivePayload["consultation"]): Promise<void> {
     await this.sendDirective(tentacleId, {
       action: "consultation_followup",
@@ -361,10 +414,33 @@ export class TentacleManager {
         lastReportAt: entry.lastReport,
         totalReports: 0,
         totalFindings: 0,
-        healthScore: entry.health === "崩溃" ? 0 : 100,
+        healthScore: entry.health === "crashed" ? 0 : 100,
         directory: entry.directory ?? this.getTentacleDir(entry.tentacleId),
         scheduleConfig,
       })
+    }
+  }
+
+  async respawnFromRegistry(): Promise<void> {
+    for (const [tentacleId, status] of this.statusMap.entries()) {
+      if (status.status !== "running") continue
+      if (this.processes.has(tentacleId)) continue // already running
+
+      const tentacleDir = this.getTentacleDir(tentacleId)
+      const metaPath = path.join(tentacleDir, "tentacle.json")
+      if (!existsSync(metaPath)) {
+        this.updateStatus(tentacleId, { status: "crashed", healthScore: 0 })
+        systemLogger.warn("respawn_skip_no_metadata", { tentacle_id: tentacleId })
+        continue
+      }
+
+      try {
+        await this.spawn(tentacleId)
+        systemLogger.info("respawn_ok", { tentacle_id: tentacleId })
+      } catch (err: any) {
+        this.updateStatus(tentacleId, { status: "crashed", healthScore: 0 })
+        systemLogger.error("respawn_failed", { tentacle_id: tentacleId, error: err.message })
+      }
     }
   }
 
@@ -417,7 +493,7 @@ export class TentacleManager {
 
     if (restartAttempt >= this.config.tentacle.crashRestartMaxAttempts) {
       this.updateStatus(tentacleId, { status: "crashed", healthScore: 0 })
-      await this.registry.updateStatus(tentacleId, "crashed", { health: "崩溃" })
+      await this.registry.updateStatus(tentacleId, "crashed", { health: "crashed" })
       systemLogger.error("tentacle_crash_permanent", { tentacle_id: tentacleId })
       tentacleLog(tentacleId, "error", "tentacle_crash_permanent", { exit_code: exitCode })
       return
@@ -440,7 +516,7 @@ export class TentacleManager {
       await this.registry.updateStatus(tentacleId, "running", {
         purpose: payload.purpose ?? "",
         runtime: payload.runtime ?? "unknown",
-        health: "良好",
+        health: "good",
       })
       systemLogger.info("tentacle_registered", { tentacle_id: tentacleId, runtime: payload.runtime })
       return
@@ -474,33 +550,112 @@ export class TentacleManager {
             payload,
           })
         : {
-            decision: payload.mode === "action_confirm" ? "send" : "discard",
+            session_id: payload.session_id ?? payload.request_id,
             requestId: payload.request_id,
+            status: "closed" as const,
+            decision: "discard" as const,
             approvedItemIds: [],
             queuedPushCount: 0,
-            session_id: payload.session_id ?? payload.request_id,
-            status: payload.mode === "action_confirm" ? "waiting_user" : "closed",
             notes: "auto consultation reply",
-            next_action: payload.mode === "action_confirm" ? "await_user" : "none",
+            consultation_id: crypto.randomUUID(),
+            message: "auto consultation reply",
+            actions_taken: [],
+            continue: false,
           }
-      await this.ipcServer.sendToTentacle(tentacleId, {
-        type: "consultation_reply",
-        sender: "brain",
-        receiver: tentacleId,
-        payload: replyPayload,
-        timestamp: new Date().toISOString(),
-        message_id: crypto.randomUUID(),
-      })
-      await this.archiveConsultation(tentacleId, payload, replyPayload)
-      this.incrementReportCounters(tentacleId)
-      await this.registry.updateStatus(tentacleId, this.statusMap.get(tentacleId)?.status ?? "running", {
-        lastReport: new Date().toISOString(),
-      })
-      brainLogger.info("tentacle_consultation_replied", {
+      // Per protocol: send reply first, then close if conversation is done
+      await this.sendConsultationReply(tentacleId, replyPayload)
+
+      if (replyPayload.continue === false) {
+        // Conversation done: send close, archive, and update counters
+        const pushedCount = replyPayload.actions_taken?.filter(a => a.action === "pushed_to_user").length ?? replyPayload.queuedPushCount ?? 0
+        const discardedCount = (payload.items?.length ?? payload.item_count ?? 0) - pushedCount
+        await this.sendConsultationClose(tentacleId, {
+          consultation_id: replyPayload.consultation_id ?? replyPayload.session_id ?? payload.request_id,
+          client_request_id: replyPayload.client_request_id ?? payload.request_id,
+          summary: replyPayload.notes ?? "",
+          pushed_count: pushedCount,
+          discarded_count: Math.max(0, discardedCount),
+          feedback: undefined,
+        })
+
+        await this.archiveConsultation(tentacleId, payload, replyPayload)
+        this.incrementReportCounters(tentacleId)
+        await this.registry.updateStatus(tentacleId, this.statusMap.get(tentacleId)?.status ?? "running", {
+          lastReport: new Date().toISOString(),
+        })
+        brainLogger.info("tentacle_consultation_closed", {
+          tentacle_id: tentacleId,
+          request_id: payload.request_id,
+          mode: payload.mode,
+          decision: replyPayload.decision ?? "unknown",
+          pushed_count: pushedCount,
+        })
+      } else {
+        // Multi-turn: Brain wants to continue the conversation.
+        // Do NOT archive — wait for tentacle's follow-up via consultation_message.
+        brainLogger.info("tentacle_consultation_continuing", {
+          tentacle_id: tentacleId,
+          consultation_id: replyPayload.consultation_id,
+          turn: 1,
+        })
+      }
+      return
+    }
+
+    if (message.type === "consultation_message") {
+      const payload = message.payload as ConsultationMessagePayload
+      if (this.consultationMessageHandler) {
+        await this.consultationMessageHandler({ tentacleId, payload })
+      } else {
+        brainLogger.warn("consultation_message_no_handler", {
+          tentacle_id: tentacleId,
+          consultation_id: payload.consultation_id,
+        })
+      }
+      return
+    }
+
+    if (message.type === "consultation_end") {
+      const payload = message.payload as ConsultationEndPayload
+      if (this.consultationEndHandler) {
+        await this.consultationEndHandler({ tentacleId, payload })
+      } else {
+        brainLogger.warn("consultation_end_no_handler", {
+          tentacle_id: tentacleId,
+          consultation_id: payload.consultation_id,
+        })
+      }
+      return
+    }
+
+    if (message.type === "tool_request") {
+      const payload = message.payload as ToolRequestPayload
+      if (this.toolRequestHandler) {
+        try {
+          const result = await this.toolRequestHandler({ tentacleId, payload })
+          await this.ipcServer.sendToTentacle(tentacleId, createIpcMessage("tool_result", tentacleId, result))
+        } catch (error: any) {
+          const errorResult: ToolResultPayload = {
+            tool_call_id: payload.tool_call_id,
+            result: {},
+            success: false,
+            error: error.message ?? "tool_request handler error",
+          }
+          await this.ipcServer.sendToTentacle(tentacleId, createIpcMessage("tool_result", tentacleId, errorResult))
+        }
+      } else {
+        const errorResult: ToolResultPayload = {
+          tool_call_id: payload.tool_call_id,
+          result: {},
+          success: false,
+          error: "No tool request handler registered",
+        }
+        await this.ipcServer.sendToTentacle(tentacleId, createIpcMessage("tool_result", tentacleId, errorResult))
+      }
+      brainLogger.info("tentacle_tool_request", {
         tentacle_id: tentacleId,
-        request_id: payload.request_id,
-        mode: payload.mode,
-        decision: replyPayload.decision ?? "unknown",
+        tool_name: payload.tool_name,
+        tool_call_id: payload.tool_call_id,
       })
       return
     }
@@ -584,7 +739,7 @@ export class TentacleManager {
       createdAt: current.createdAt,
       directory: current.directory,
       lastReport: current.lastReportAt,
-      health: current.healthScore > 0 ? "良好" : "崩溃",
+      health: current.healthScore > 0 ? "good" : "crashed",
       scheduleConfig: current.scheduleConfig ? JSON.stringify(current.scheduleConfig) : undefined,
     })
   }
@@ -619,7 +774,7 @@ export class TentacleManager {
         reply,
         archivedAt: new Date().toISOString(),
       }, null, 2)
-      const ids = new Set([reply.session_id, request.session_id, request.request_id].filter(Boolean))
+      const ids = new Set([reply.consultation_id, (request as any).session_id, (request as any).request_id].filter(Boolean))
       for (const id of ids) {
         await fs.writeFile(path.join(sessionsDir, `${id}.json`), archived, "utf-8")
       }
@@ -700,11 +855,12 @@ export class TentacleManager {
   }
 
   private toSelfIntervalSeconds(interval?: string): string {
-    if (!interval) return ""
+    if (!interval) return "3600"
     try {
       return String(Math.max(1, Math.round(parseDurationMs(interval) / 1000)))
     } catch {
-      return ""
+      systemLogger.warn(`Failed to parse interval "${interval}", using default 3600s`)
+      return "3600"
     }
   }
 
@@ -733,7 +889,7 @@ export class TentacleManager {
 }
 
 function inferScheduleConfig(trigger?: string): TentacleScheduleConfig {
-  if (trigger && /^\d+(?:ms|s|m|h|d|w)$/.test(trigger)) {
+  if (trigger && /^\d+(?:\.\d+)?(?:ms|s|m|h|d|w)$/.test(trigger)) {
     return { primaryTrigger: { type: "self-schedule", interval: trigger } }
   }
   return { primaryTrigger: { type: "self-schedule", interval: "6h" } }

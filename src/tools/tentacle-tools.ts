@@ -16,8 +16,13 @@ function ok(text: string) {
 }
 
 function normalizeScheduleAction(action: string): string {
-  if (action === "update_self_schedule_config") return "set_self_schedule"
-  return action
+  const aliases: Record<string, string> = {
+    "update_self_schedule_config": "set_self_schedule",
+    "set_self_schedule_interval": "set_self_schedule",
+    "set_interval": "set_self_schedule",
+    "update_interval": "set_self_schedule",
+  }
+  return aliases[action] ?? action
 }
 
 function normalizeDurationInput(input: string): string {
@@ -158,29 +163,30 @@ export function createTentacleTools(
   const listTentacles: ToolDefinition = {
     name: "list_tentacles",
     label: "List Tentacles",
-    description: "列出所有触手及其状态",
+    description: "List the status of all current tentacles. Use this to confirm whether a tentacle has successfully come online after deployment.",
     parameters: Type.Object({
-      status_filter: Type.Optional(Type.Union([
-        Type.Literal("all"),
-        Type.Literal("active"),
-        Type.Literal("running"),
-        Type.Literal("registered"),
-        Type.Literal("deploying"),
-        Type.Literal("pending"),
-        Type.Literal("paused"),
-        Type.Literal("weakened"),
-        Type.Literal("killed"),
-        Type.Literal("crashed"),
-      ])),
+      status_filter: Type.Optional(Type.String({
+        description: "Filter by status. Single value or comma-separated. Valid values: all / active / running / registered / deploying / pending / paused / weakened / killed / crashed. Use 'all' if unsure.",
+      })),
     }),
     async execute(_id, params: any) {
-      const filter = params.status_filter ?? "all"
+      const VALID_STATUSES = new Set(["all", "active", "running", "registered", "deploying", "pending", "paused", "weakened", "killed", "crashed"])
+      const ACTIVE_STATUSES = ["running", "registered", "paused", "weakened"]
+      const raw = (params.status_filter ?? "all") as string
+      const filters = raw.split(",").map((s: string) => s.trim()).filter(Boolean)
+      const invalid = filters.filter((f: string) => !VALID_STATUSES.has(f))
+      if (invalid.length > 0) {
+        return ok(`Error: invalid status_filter values: ${invalid.join(", ")}. Valid: all, active, running, registered, deploying, pending, paused, weakened, killed, crashed`)
+      }
       const items = manager.listAll()
-      const filtered = filter === "all"
+      const useAll = filters.includes("all")
+      const useActive = filters.includes("active")
+      const filtered = useAll
         ? items
-        : filter === "active"
-          ? items.filter((item) => ["running", "registered", "paused", "weakened"].includes(item.status))
-          : items.filter((item) => item.status === filter)
+        : items.filter((item) =>
+            filters.includes(item.status)
+            || (useActive && ACTIVE_STATUSES.includes(item.status))
+          )
       if (filtered.length === 0) return ok("No tentacles found.")
       const rendered = await Promise.all(filtered.map(async (item) => {
         const artifacts = await resolveTentacleArtifacts(manager, logDir, item.tentacleId)
@@ -208,7 +214,12 @@ export function createTentacleTools(
   const manageTentacle: ToolDefinition = {
     name: "manage_tentacle",
     label: "Manage Tentacle",
-    description: "暂停、恢复、关闭、削弱、增强、合并或立即触发触手",
+    description: `Manage tentacle runtime state.
+    pause: Pause (only available when running)
+    resume: Resume (only available when paused)
+    kill: Stop (available when running or paused)
+    run_now: Trigger an immediate execution (only available when running)
+    Note: Killed tentacles cannot be resumed; you need to re-spawn via spawn_from_skill.`,
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("pause"),
@@ -304,7 +315,7 @@ export function createTentacleTools(
   const manageTentacleSchedule: ToolDefinition = {
     name: "manage_tentacle_schedule",
     label: "Manage Tentacle Schedule",
-    description: "管理触手的 cron、heartbeat 和自管频率",
+    description: "Manage tentacle cron jobs, heartbeat, and self-schedule frequency",
     parameters: Type.Object({
       tentacle_id: Type.String(),
       action: Type.Union([
@@ -451,7 +462,7 @@ export function createTentacleTools(
   const inspectTentacleLog: ToolDefinition = {
     name: "inspect_tentacle_log",
     label: "Inspect Tentacle Log",
-    description: "查看触手日志尾部内容",
+    description: "View tentacle runtime logs. When a tentacle has issues, use this first to see specific errors — much more useful than web_search.",
     parameters: Type.Object({
       tentacle_id: Type.String(),
       n_lines: Type.Optional(Type.Number({ default: 50 })),
@@ -490,65 +501,75 @@ export function createTentacleTools(
     },
   }
 
-  // M3+M4: Unified spawn_from_skill — works with skill_tentacle, legacy SKILL blueprint, or from scratch
+  // Unified spawn_from_skill — works with skill_tentacle, classic SKILL blueprint, or from scratch
   const spawnFromSkill: ToolDefinition = {
     name: "spawn_from_skill",
     label: "Spawn Tentacle",
-    description: "创建并部署新的触手 Agent 系统。skill_tentacle 直接部署（不生成代码）；有 SKILL 蓝图时作为 context 定制生成；无 SKILL 时按 skill_tentacle 规范从零生成。",
+    description: "Create and deploy a new tentacle agent system. deploy mode deploys directly (no code generation); customize mode modifies logic based on an existing SKILL; create mode generates from scratch.",
     parameters: Type.Object({
-      skill_name: Type.Optional(Type.String({ description: "SKILL 名称。有值时走场景一（部署已有 skill_tentacle）或兼容旧式 SKILL；无值时走场景二（从零生成）" })),
-      tentacle_id: Type.String({ description: "触手 ID，格式 t_{slug}" }),
-      purpose: Type.String({ description: "触手使命（一句话）" }),
-      workflow: Type.String({ description: "工作流描述（自然语言）" }),
-      capabilities: Type.Optional(Type.Array(Type.String())),
-      report_strategy: Type.Optional(Type.String({ description: "什么情况下上报大脑" })),
-      infrastructure: Type.Optional(Type.Object({
-        needsHttpServer: Type.Optional(Type.Boolean()),
-        needsDatabase: Type.Optional(Type.Boolean()),
-        needsExternalBot: Type.Optional(Type.Object({
-          platform: Type.String(),
-          purpose: Type.String(),
-        })),
-        needsLlm: Type.Optional(Type.Boolean()),
-        needsFileStorage: Type.Optional(Type.Boolean()),
+      // ── Structured fields (hard info required at code level) ──
+      tentacle_id: Type.String({
+        description: "New tentacle ID, format: t_{short_english_identifier}, e.g. t_hn_radar, t_arxiv_scout",
+      }),
+      skill_name: Type.Optional(Type.String({
+        description: "Matching SKILL name. Required for scenario A/B, omit for scenario C.",
       })),
-      external_apis: Type.Optional(Type.Array(Type.String())),
+      mode: Type.Union([
+        Type.Literal("deploy"),
+        Type.Literal("customize"),
+        Type.Literal("create"),
+      ], {
+        description: `Deployment mode — you must determine this yourself:
+      deploy: A matching SKILL exists and code does not need changes, only configuration. Use this for most built-in tentacle deployments.
+      customize: A matching SKILL exists but the user wants to change code logic (add features, change algorithms, swap data sources).
+      create: No matching SKILL exists; must start from scratch.`,
+      }),
+      purpose: Type.String({
+        description: "The tentacle's mission — describe in one sentence what it does.",
+      }),
+      config: Type.Optional(Type.Record(Type.String(), Type.String(), {
+        description: "Configuration parameters; keys correspond to env_var names in the customizable fields of SKILL.md. Use this for scenario A to pass user preferences.",
+      })),
+
+      // ── Free-text field (Brain's requirement description written for Claude Code) ──
+      brief: Type.Optional(Type.String({
+        description: `Requirement description for scenarios B/C. Write in natural language, as if briefing an engineer.
+      Should include: who the user is, what they want, data sources, trigger frequency, special requirements.
+      Scenario A does not need this (configuration is passed via the config field).
+      Scenario B should clearly describe what to change on top of the existing SKILL.
+      Scenario C should fully describe the tentacle's mission and how it works.`,
+      })),
+
       preferred_runtime: Type.Optional(Type.String({ default: "auto" })),
-      ask_user_confirm: Type.Optional(Type.Boolean({ default: true })),
-      // M4 additions
+
+      // skill_tentacle options
       skill_tentacle_path: Type.Optional(Type.String({
-        description: "直接指向本地 skill_tentacle 目录或 .tentacle 文件路径，跳过 skill 搜索",
+        description: "Path to a local skill_tentacle directory or .tentacle file, skipping skill search",
       })),
       package_after: Type.Optional(Type.Boolean({
-        description: "场景二完成后是否打包为可分享的 skill_tentacle",
+        description: "Whether to package into a shareable skill_tentacle after scenario C completes",
         default: false,
-      })),
-      config: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
-        description: "用户个性化配置（场景一时传入 customizable 字段值）",
       })),
     }),
     async execute(_id, params: any) {
-      void params.ask_user_confirm
       try {
         brainLogger.info("skill_spawn_start", {
           tentacle_id: params.tentacle_id,
           skill_name: params.skill_name ?? "none",
+          mode: params.mode,
           purpose: params.purpose,
         })
         const spawnParams: SpawnParams = {
+          mode: params.mode,
           skillName: params.skill_name,
           tentacleId: params.tentacle_id,
           purpose: params.purpose,
-          workflow: params.workflow,
-          capabilities: params.capabilities,
-          reportStrategy: params.report_strategy,
-          infrastructure: params.infrastructure,
-          externalApis: params.external_apis,
           preferredRuntime: params.preferred_runtime ?? "auto",
           userConfirmed: true,
           skillTentaclePath: params.skill_tentacle_path,
           packageAfter: params.package_after,
           config: params.config,
+          brief: params.brief,
         }
         const result = await skillSpawner.spawn(spawnParams)
         if (result.success) {
@@ -557,8 +578,8 @@ export function createTentacleTools(
             runtime_status: result.spawned ? "running" : "not_running",
             requires_explicit_run_confirmation: !result.spawned,
             next_step: result.spawned
-              ? "触手已通过 spawn + registration 确认运行。"
-              : "触手目前未运行；如需运行，必须继续检查 spawned/running 状态或显式执行启动动作。",
+              ? "Tentacle is confirmed running via spawn + registration."
+              : "Tentacle is not currently running; to run it, you must check spawned/running status or explicitly perform a start action.",
           }
           brainLogger.info("skill_spawn_success", {
             tentacle_id: params.tentacle_id,
@@ -603,11 +624,11 @@ export function createTentacleTools(
     },
   }
 
-  // M3: Review all tentacles and get recommended actions
+  // Review all tentacles and get recommended actions
   const reviewTentacles: ToolDefinition = {
     name: "review_tentacles",
     label: "Review Tentacles",
-    description: "复盘所有活跃触手，基于健康度评分返回 weaken/kill/merge/strengthen 建议",
+    description: "Review all active tentacles and return weaken/kill/merge/strengthen recommendations based on health scores",
     parameters: Type.Object({}),
     async execute() {
       if (!reviewEngine) return ok("Error: review engine not available")

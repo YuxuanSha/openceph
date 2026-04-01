@@ -3,6 +3,17 @@ import { existsSync } from "fs"
 import * as path from "path"
 import type { ConsultationMode } from "./contract.js"
 
+export interface ConsultationTrackedItem {
+  itemId: string
+  requestId: string
+  content: string
+  reason: string
+  createdAt: string
+  updatedAt: string
+  status: "pending" | "approved" | "rejected" | "pushed"
+  sessionId: string
+}
+
 export interface ConsultationSessionRecord {
   sessionId: string
   tentacleId: string

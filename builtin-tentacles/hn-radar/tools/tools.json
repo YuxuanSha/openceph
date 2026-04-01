@@ -1,0 +1,88 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "hn_newest",
+      "description": "Fetch the newest Hacker News posts. Sorted by submission time in descending order, with continuously fresh content.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "count": {"type": "integer", "description": "Number of posts to fetch (max 100)", "default": 50},
+          "points": {"type": "integer", "description": "Minimum score filter (0 = no filter)", "default": 0},
+          "query": {"type": "string", "description": "Optional: keyword search"}
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "hn_frontpage",
+      "description": "Fetch the current Hacker News front page hot posts. High-quality content curated by HN community voting.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "count": {"type": "integer", "description": "Number of posts to fetch (max 100)", "default": 30}
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "hn_ask",
+      "description": "Fetch Ask HN posts. Technical Q&A and community discussions.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "count": {"type": "integer", "description": "Number of posts to fetch", "default": 20},
+          "points": {"type": "integer", "description": "Minimum score", "default": 0}
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "hn_show",
+      "description": "Fetch Show HN posts. Projects and products showcased by developers.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "count": {"type": "integer", "description": "Number of posts to fetch", "default": 20},
+          "points": {"type": "integer", "description": "Minimum score", "default": 0}
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "hn_search",
+      "description": "Search Hacker News posts. Search by keywords and time range via the Algolia API.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string", "description": "Search keywords"},
+          "count": {"type": "integer", "description": "Number of results", "default": 20},
+          "since_hours": {"type": "integer", "description": "Only return posts from the last N hours", "default": 24},
+          "min_points": {"type": "integer", "description": "Minimum score", "default": 0}
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "hn_best",
+      "description": "Fetch the recent best Hacker News posts. Curated high-quality, highly-discussed content.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "count": {"type": "integer", "description": "Number of posts to fetch", "default": 30}
+        }
+      }
+    }
+  }
+]

@@ -223,6 +223,7 @@ entry: src/main.py
     const spawner = new SkillSpawner(config, loader, manager, codeAgent)
 
     const result = await spawner.spawn({
+      mode: "deploy",
       skillName: "deploy-test",
       tentacleId: "t_deploy_test",
       purpose: "integration test deployment",
@@ -252,8 +253,8 @@ entry: src/main.py
     expect(fs.existsSync(path.join(tentacleDir, "src", "main.py"))).toBe(true)
     expect(fs.existsSync(path.join(tentacleDir, "src", "ipc_client.py"))).toBe(true)
 
-    // Verify CodeAgent.deployExisting was called
-    expect(codeAgent.deployExisting).toHaveBeenCalledWith(tentacleDir)
+    // Scene A (deploy): NEVER calls Code Agent — pure copy + setup + spawn
+    expect(codeAgent.deployExisting).not.toHaveBeenCalled()
 
     await ipc.stop()
   }, 20_000)
@@ -280,6 +281,7 @@ entry: src/main.py
     const spawner = new SkillSpawner(config, loader, manager, codeAgent)
 
     const result = await spawner.spawn({
+      mode: "deploy",
       skillName: "deploy-invalid",
       tentacleId: "t_deploy_invalid",
       purpose: "should fail validation",

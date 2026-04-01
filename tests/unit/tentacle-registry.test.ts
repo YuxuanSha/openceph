@@ -25,12 +25,11 @@ describe("TentacleRegistry", () => {
       createdAt: "2026-03-20T00:00:00Z",
       runtime: "python",
     })
-    await registry.updateStatus("t_demo", "paused", { health: "良好" })
-
+    await registry.updateStatus("t_demo", "paused", { health: "good" })
     const entries = await registry.readAll()
     expect(entries).toHaveLength(1)
     expect(entries[0].tentacleId).toBe("t_demo")
     expect(entries[0].status).toBe("paused")
-    expect(entries[0].health).toBe("良好")
+    expect(entries[0].health).toBe("good")
   })
 })

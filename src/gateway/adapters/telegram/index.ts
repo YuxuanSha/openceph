@@ -7,7 +7,7 @@ import { formatForTelegram, chunkMessage } from "./formatter.js"
 import { gatewayLogger } from "../../../logger/index.js"
 
 const STREAM_THROTTLE_MS = 500  // min ms between Telegram edit calls
-const STREAM_PLACEHOLDER = "💭 思考中..."
+const STREAM_PLACEHOLDER = "💭 Thinking..."
 
 export class TelegramChannelPlugin implements ChannelPlugin {
   readonly channelId = "telegram"

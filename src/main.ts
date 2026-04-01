@@ -18,10 +18,40 @@ import { HeartbeatRunner } from "./heartbeat/heartbeat-runner.js"
 import { HeartbeatScheduler } from "./heartbeat/scheduler.js"
 import { MemoryManager } from "./memory/memory-manager.js"
 import { SessionStoreManager } from "./session/session-store.js"
+import { upgradeBuiltinTentacles } from "./cli.js"
 import * as fs from "fs/promises"
-import { existsSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, copyFileSync } from "fs"
 import * as path from "path"
 import * as os from "os"
+
+const TEMPLATE_VERSION = "1.0.2"
+
+function migrateWorkspaceTemplates(): void {
+  const OPENCEPH_HOME = path.join(os.homedir(), ".openceph")
+  const workspaceDest = path.join(OPENCEPH_HOME, "workspace")
+  if (!existsSync(workspaceDest)) return
+
+  const workspaceSrc = path.join(__dirname, "templates", "workspace")
+  const workspaceSrcAlt = path.join(__dirname, "..", "src", "templates", "workspace")
+  const actualWorkspaceSrc = existsSync(workspaceSrc) ? workspaceSrc : existsSync(workspaceSrcAlt) ? workspaceSrcAlt : null
+  if (!actualWorkspaceSrc) return
+
+  const versionFile = path.join(workspaceDest, ".template-version")
+  let currentVersion = ""
+  try { currentVersion = readFileSync(versionFile, "utf-8").trim() } catch {}
+  if (currentVersion === TEMPLATE_VERSION) return
+
+  // NOT migrated: USER.md, MEMORY.md (user data), TOOLS.md (auto-generated), TENTACLES.md (live registry)
+  const managedFiles = ["AGENTS.md", "SOUL.md", "CONSULTATION.md", "HEARTBEAT.md", "IDENTITY.md", "BOOTSTRAP.md"]
+  for (const file of managedFiles) {
+    const src = path.join(actualWorkspaceSrc, file)
+    const dest = path.join(workspaceDest, file)
+    if (existsSync(src)) {
+      copyFileSync(src, dest)
+    }
+  }
+  writeFileSync(versionFile, TEMPLATE_VERSION, "utf-8")
+}
 
 export async function startOpenCeph(): Promise<void> {
   // 0. Set up proxy (must be before any API calls)
@@ -33,6 +63,13 @@ export async function startOpenCeph(): Promise<void> {
 
   // 2. Init loggers
   initLoggers(config)
+
+  // 2.5 Migrate workspace templates for existing installations
+  try {
+    migrateWorkspaceTemplates()
+  } catch (err) {
+    systemLogger.warn("template_migration_failed", { error: err instanceof Error ? err.message : String(err) })
+  }
 
   // 3. Create Pi context
   const piCtx = await createPiContext(config)
@@ -50,10 +87,19 @@ export async function startOpenCeph(): Promise<void> {
       if (gatewayRef) {
         await gatewayRef.deliverToUser(target, content)
       } else {
-        console.log(`[Ceph → ${target.recipientId ?? target.senderId}] ${content.text}`)
+        systemLogger.warn("brain_delivery_no_gateway", { recipient: target.recipientId ?? target.senderId, text: content.text })
       }
     },
   })
+  // Auto-upgrade builtin skills on every start (ensures latest code is in skills/)
+  try {
+    const skillsDir = path.join(os.homedir(), ".openceph", "skills")
+    await upgradeBuiltinTentacles(skillsDir)
+    systemLogger.info("builtin_skills_synced")
+  } catch (err) {
+    systemLogger.warn("builtin_skills_sync_failed", { error: err instanceof Error ? err.message : String(err) })
+  }
+
   await brain.initialize()
 
   // Register MCP tools to brain's tool registry
@@ -135,7 +181,7 @@ export async function startOpenCeph(): Promise<void> {
 
   // 9. Graceful shutdown
   const shutdown = async () => {
-    console.log("\nShutting down...")
+    systemLogger.info("shutdown_initiated")
     resetScheduler.stop()
     heartbeatScheduler.stop()
     cronScheduler.stop()

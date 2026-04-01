@@ -5,6 +5,7 @@ import * as os from "os"
 import { initLoggers } from "../../src/logger/index.js"
 import { SkillLoader } from "../../src/skills/skill-loader.js"
 import { SkillSpawner } from "../../src/skills/skill-spawner.js"
+import { TentacleValidator } from "../../src/code-agent/validator.js"
 import { IpcServer } from "../../src/tentacle/ipc-server.js"
 import { TentacleRegistry } from "../../src/tentacle/registry.js"
 import { PendingReportsQueue } from "../../src/tentacle/pending-reports.js"
@@ -59,48 +60,61 @@ describe("SkillSpawner", () => {
       new PendingReportsQueue(path.join(dir, "pending.json")),
     )
     const loader = new SkillLoader([path.join(dir, "skills")])
-    const generate = vi.fn(async () => ({
-      runtime: "python",
-      files: [
-        { path: "main.py", content: "print('ok')\n" },
-        { path: "README.md", content: "# generated\n" },
-      ],
-      entryCommand: "python3 main.py",
-      setupCommands: [],
-      dependencies: undefined,
-      envVars: ["OPENCEPH_TENTACLE_ID", "OPENCEPH_TRIGGER_MODE"],
-      description: "generated tentacle",
-      diagnostics: {
+    // Create tentacle dir structure so validator can find files after generation
+    const tentacleDir = path.join(manager.getTentacleDir("t_demo"))
+    fs.mkdirSync(path.join(tentacleDir, "prompt"), { recursive: true })
+    fs.mkdirSync(path.join(tentacleDir, "src"), { recursive: true })
+
+    const generateSkillTentacle = vi.fn(async () => {
+      // Simulate Claude Code writing files to the tentacle dir
+      fs.writeFileSync(path.join(tentacleDir, "SKILL.md"), "---\nname: t_demo\nmetadata:\n  openceph:\n    tentacle:\n      spawnable: true\n      runtime: python\n      entry: src/main.py\n---\n")
+      fs.writeFileSync(path.join(tentacleDir, "README.md"), "# generated\n## Start Command\n```bash\npython3 src/main.py\n```\n")
+      fs.writeFileSync(path.join(tentacleDir, "prompt", "SYSTEM.md"), "# Identity\nYou are t_demo.\n\n# Mission\nGenerated tentacle for testing.")
+      fs.writeFileSync(path.join(tentacleDir, "src", "main.py"), "print('ok')\n")
+      return {
         sessionFile: path.join(dir, "claude-session.jsonl"),
         workDir: path.join(dir, "claude-work"),
+        logsDir: path.join(dir, "agent-logs"),
+        terminalLog: path.join(dir, "agent-logs", "terminal.log"),
+        stdoutLog: path.join(dir, "agent-logs", "stdout.log"),
+        stderrLog: path.join(dir, "agent-logs", "stderr.log"),
         elapsedMs: 1234,
         turnCount: 2,
         toolCalls: [],
-        finalText: "Claude finished successfully",
-        claudeSessionId: "claude-session-1",
-        modelId: "claude-sonnet-4-5-20250929",
-        resultSubtype: "success",
-        persistentSession: true,
+      }
+    })
+    const fixSkillTentacle = vi.fn()
+    const deployExisting = vi.fn()
+    // Mock manager spawn/register to avoid real process start
+    vi.spyOn(manager, "spawn").mockResolvedValue(undefined)
+    vi.spyOn(manager, "waitForRegistration").mockResolvedValue(true)
+    vi.spyOn(manager, "getStatus").mockReturnValue({ pid: 12345 } as any)
+
+    const spawner = new SkillSpawner(config, loader, manager, { generateSkillTentacle, fixSkillTentacle, deployExisting } as any)
+
+    // Mock validator to always pass (this test focuses on routing, not contract validation)
+    vi.spyOn(TentacleValidator.prototype, "validateSkillTentacle").mockResolvedValue({
+      passed: true,
+      checks: {
+        structure: { passed: true, errors: [], warnings: [] },
+        syntax: { passed: true, errors: [], warnings: [] },
+        contract: { passed: true, errors: [], warnings: [] },
+        security: { passed: true, errors: [], warnings: [] },
+        smoke: { passed: true, errors: [], warnings: [] },
       },
-    }))
-    const spawner = new SkillSpawner(config, loader, manager, { generate } as any)
+    } as any)
 
     const result = await spawner.spawn({
+      mode: "create",
       skillName: "demo",
       tentacleId: "t_demo",
       purpose: "demo skill test",
       workflow: "test workflow",
       userConfirmed: true,
     })
-    expect(generate).toHaveBeenCalledTimes(1)
+    expect(generateSkillTentacle).toHaveBeenCalledTimes(1)
     expect(result.success).toBe(true)
     expect(result.tentacleId).toBe("t_demo")
-    expect(result.spawned).toBe(false)
-    expect(result.deployed).toBe(true)
-    expect(result.claudeFinalText).toBe("Claude finished successfully")
-    expect(result.claudeSessionId).toBe("claude-session-1")
-    expect(result.files).toEqual(["main.py", "README.md"])
-    expect(result.generatedFiles?.map((file) => file.path)).toEqual(["main.py", "README.md"])
     expect(fs.existsSync(path.join(manager.getTentacleDir("t_demo"), "tentacle.json"))).toBe(true)
     await ipc.stop()
   }, 20_000)

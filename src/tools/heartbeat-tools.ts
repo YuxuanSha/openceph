@@ -13,18 +13,18 @@ export function createHeartbeatTools(workspaceDir: string): ToolRegistryEntry[] 
   const createHeartbeatTask: ToolDefinition = {
     name: "create_heartbeat_task",
     label: "Create Heartbeat Task",
-    description: "向 HEARTBEAT.md 添加待处理任务",
+    description: "Add a pending task to HEARTBEAT.md",
     parameters: Type.Object({
-      task: Type.String({ description: "任务描述" }),
+      task: Type.String({ description: "Task description" }),
       schedule: Type.Union([
         Type.Literal("daily"),
         Type.Literal("weekly"),
         Type.Literal("once"),
       ]),
       section: Type.Optional(Type.Union([
-        Type.Literal("每日必做"),
-        Type.Literal("每周任务"),
-        Type.Literal("待处理"),
+        Type.Literal("Daily Tasks"),
+        Type.Literal("Weekly Tasks"),
+        Type.Literal("Pending"),
       ])),
     }),
     async execute(_id, params: any) {
@@ -36,9 +36,9 @@ export function createHeartbeatTools(workspaceDir: string): ToolRegistryEntry[] 
   const completeHeartbeatTask: ToolDefinition = {
     name: "complete_heartbeat_task",
     label: "Complete Heartbeat Task",
-    description: "将 HEARTBEAT.md 中的任务标记为完成",
+    description: "Mark a task in HEARTBEAT.md as completed",
     parameters: Type.Object({
-      task_description: Type.String({ description: "任务描述，需与 HEARTBEAT.md 中任务一致" }),
+      task_description: Type.String({ description: "Task description — must match the task in HEARTBEAT.md exactly" }),
       notes: Type.Optional(Type.String()),
     }),
     async execute(_id, params: any) {

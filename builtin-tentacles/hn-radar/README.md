@@ -1,23 +1,62 @@
-# hn-radar
+# HN Radar v1.4.0
 
-## 环境变量
-- `HN_TOPICS`: 逗号分隔的主题关键词
-- `HN_MIN_SCORE`: 最低分数
-- `HN_MIN_COMMENTS`: 最低评论数
-- `USE_LLM_FILTER`: 是否启用 LLM 二次过滤，默认 `false`
-- `LLM_FILTER_CRITERIA`: 启用 LLM 过滤时使用的判断标准
-- `HN_INTERVAL_SECONDS`: 自调度轮询间隔，默认 `7200`
+General-purpose Hacker News monitoring tentacle. Three-layer filtering architecture (Rules -> LLM -> Brain review), finding truly noteworthy technical content from hundreds of daily HN posts.
 
-## 部署步骤
-1. `python3 -m venv venv`
-2. `venv/bin/pip install -r src/requirements.txt`
-3. 由 OpenCeph 写入 `.env` 后启动 `src/main.py`
+## Architecture
 
-## 启动命令
-`venv/bin/python src/main.py`
+### Layer 1: Data Collection + Rule-Based Pre-Filtering
+- Supports 6 data sources: newest, frontpage, ask, show, best, search
+- Multiple data sources can be enabled simultaneously (`HN_FEEDS=newest,frontpage,search`)
+- Search source supports Algolia time-window incremental queries
+- Optional rule-based filtering (min_score, min_comments), disabled by default (deferred to LLM)
+- Smart deduplication: cross-source merging + exclusion of processed/rejected items
 
-## 运行说明
-- IPC 使用 OpenCeph 注入的 `stdin/stdout JSON Lines`，日志请走 `stderr`
-- `self` 模式下按 `HN_INTERVAL_SECONDS` 自行轮询
-- `external` 模式下等待 `run_now` 指令
-- 大分高分帖子会立即上报，其余内容按批次聚合
+### Layer 2: LLM-Powered Smart Filtering
+- Enabled by default (`USE_LLM_FILTER=true`)
+- Evaluates in batches (batch_size=5), one LLM call per batch
+- Filtering criteria can be customized in natural language (`LLM_FILTER_CRITERIA`)
+- Fail-open on LLM failure (accepts all items, no data loss)
+
+### Layer 3: Brain Review + User Notification
+- Batch reporting (default 3 items per batch, reports immediately on first run)
+- Hot posts (score >= 300 + importance: high) are reported individually and immediately
+- Supports Brain follow-up queries; tentacle can invoke websearch/webfetch for additional information
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HN_TOPICS` | `AI,LLM,agent,startup` | Topics of interest (comma-separated), used for search source and LLM evaluation |
+| `HN_FEEDS` | `newest` | Data sources (comma-separated): newest, frontpage, ask, show, best, search |
+| `HN_FETCH_COUNT` | `50` | Number of items to fetch per data source per run (RSS max 100) |
+| `HN_MIN_SCORE` | `0` | Minimum score (0 = no filtering, defer to LLM) |
+| `HN_MIN_COMMENTS` | `0` | Minimum comment count (0 = no filtering) |
+| `USE_LLM_FILTER` | `true` | Enable LLM-powered smart filtering |
+| `LLM_FILTER_CRITERIA` | Filter for engineering content | LLM filtering criteria (natural language) |
+| `BATCH_SIZE` | `3` | Batch reporting threshold |
+| `HN_INTERVAL_SECONDS` | `7200` | Scan interval (seconds), can be set to 60 for high-frequency mode |
+
+## Deployment
+
+Automatically deployed by OpenCeph Brain via `spawn_from_skill`.
+
+### Quick Deployment (default config, works out of the box)
+```
+deploy(config: {})
+```
+
+### Custom Deployment Example
+```
+deploy(config: {
+    HN_FEEDS: "newest,frontpage",
+    HN_INTERVAL_SECONDS: "60",
+    HN_TOPICS: "AI,Rust,distributed",
+    USE_LLM_FILTER: "true",
+    BATCH_SIZE: "1",
+})
+```
+
+## Operating Modes
+- `self` mode: polls on its own according to `HN_INTERVAL_SECONDS`
+- `external` mode: waits for Brain to send `run_now` command
+- IPC uses stdin/stdout JSON Lines; logs go to stderr

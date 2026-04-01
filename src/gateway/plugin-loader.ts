@@ -35,7 +35,7 @@ const REQUIRED_PROPS: (keyof ChannelPlugin)[] = [
 ]
 
 /**
- * M3 full plugin loader: discovery → scope filter → dynamic import →
+ * Plugin loader: discovery → scope filter → dynamic import →
  * interface validation → register to Gateway → hot-reload.
  */
 export class PluginLoader {

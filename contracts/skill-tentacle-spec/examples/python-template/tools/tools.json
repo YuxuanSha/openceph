@@ -1,0 +1,41 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "fetch_items",
+      "description": "Fetch the latest content from the data source (replace with your data source)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search keywords"
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Maximum number of results to return",
+            "default": 50
+          }
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_item_details",
+      "description": "Get detailed information for a single item (replace with your data source)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "Item ID"
+          }
+        },
+        "required": ["item_id"]
+      }
+    }
+  }
+]

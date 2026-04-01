@@ -1,11 +1,14 @@
 ---
 name: hn-radar
-description: Monitor Hacker News posts and report relevant items.
-version: 1.0.0
+description: |
+  General-purpose Hacker News monitoring tentacle. Supports 6 data sources, LLM-powered smart filtering, and batch reporting.
+  Fetches latest posts by default, runs each through LLM screening, and reports worthy items to Brain for user notification.
+version: 1.4.0
 metadata:
   openceph:
     emoji: "📡"
-    trigger_keywords: ["Hacker News", "HN", "技术新闻", "开源动态", "tech news"]
+    category: "monitoring"
+    trigger_keywords: ["Hacker News", "HN", "tech news", "open source updates", "tech news"]
     tentacle:
       spawnable: true
       runtime: python
@@ -16,33 +19,68 @@ metadata:
         - "venv/bin/pip install -r src/requirements.txt"
       requires:
         bins: ["python3"]
+        llm: true
         env: []
-      capabilities: ["api_integration", "database"]
+      capabilities:
+        daemon:
+          - "api_integration"
+          - "database"
+        agent:
+          - "llm_filter"
+        consultation:
+          mode: "batch"
+          batch_threshold: 3
       infrastructure:
         needsDatabase: true
-        needsLlm: false
+        needsLlm: true
       customizable:
         - field: "topics"
-          description: "关注主题关键词"
+          description: "Topics of interest for Algolia search and LLM evaluation (comma-separated)"
           env_var: "HN_TOPICS"
           default: "AI,LLM,agent,startup"
-        - field: "min_score"
-          description: "最低 HN 分数"
-          env_var: "HN_MIN_SCORE"
+        - field: "feeds"
+          description: "Enabled data sources: newest,frontpage,ask,show,search (comma-separated)"
+          env_var: "HN_FEEDS"
+          default: "newest"
+        - field: "fetch_count"
+          description: "Number of items to fetch per data source per run (RSS max 100)"
+          env_var: "HN_FETCH_COUNT"
           default: "50"
+        - field: "min_score"
+          description: "Minimum score (0 = no filtering, defer to LLM)"
+          env_var: "HN_MIN_SCORE"
+          default: "0"
         - field: "min_comments"
-          description: "最低评论数"
+          description: "Minimum comment count (0 = no filtering)"
           env_var: "HN_MIN_COMMENTS"
-          default: "20"
+          default: "0"
         - field: "use_llm_filter"
-          description: "是否启用 LLM 辅助过滤（需要 OPENROUTER_API_KEY）"
+          description: "Enable LLM-powered smart filtering (recommended)"
           env_var: "USE_LLM_FILTER"
-          default: "false"
+          default: "true"
         - field: "llm_filter_criteria"
-          description: "额外过滤标准"
+          description: "LLM filtering criteria (natural language description)"
           prompt_placeholder: "{LLM_FILTER_CRITERIA}"
-          default: "优先具体工程实践，排除纯发布新闻"
+          default: "Select content with engineering value: architecture design, system optimization, open source projects, in-depth technical analysis. Exclude pure news announcements, job postings, and low-quality discussions."
+        - field: "batch_size"
+          description: "Batch reporting threshold (reports immediately on first run)"
+          env_var: "BATCH_SIZE"
+          default: "3"
+        - field: "interval"
+          description: "Scan interval (seconds)"
+          env_var: "HN_INTERVAL_SECONDS"
+          default: "7200"
 ---
 # HN Radar
 
-Monitor Hacker News, deduplicate items, and report worthy findings in batches.
+General-purpose Hacker News monitoring tentacle. Fetches latest posts by default, runs each through LLM-powered smart screening, and reports worthy items to Brain for user notification.
+
+## Works Out of the Box
+- Default data source: `newest` (all latest posts, no score threshold)
+- Default filtering: LLM-powered smart evaluation (`USE_LLM_FILTER=true`)
+- Works immediately after deployment, no additional configuration needed
+
+## Custom Modes
+- Traditional mode: `USE_LLM_FILTER=false` + `HN_MIN_SCORE=50` + `HN_MIN_COMMENTS=20`
+- Multiple data sources: `HN_FEEDS=newest,frontpage,search`
+- High-frequency scanning: `HN_INTERVAL_SECONDS=60`

@@ -35,6 +35,7 @@ describe("integration: consultation queue", () => {
 
     manager.setConsultationHandler(async ({ tentacleId, payload }) => {
       const queuedIds: string[] = []
+      const actionsTaken: Array<{ action: "pushed_to_user" | "queued_for_digest"; item_ref: string }> = []
       for (const item of payload.items ?? []) {
         if (item.tentacleJudgment === "uncertain") continue
         const approved = makeApprovedItem({
@@ -45,40 +46,57 @@ describe("integration: consultation queue", () => {
         })
         await outbound.addApprovedItem(approved)
         queuedIds.push(approved.itemId)
+        actionsTaken.push({
+          action: item.tentacleJudgment === "important" ? "pushed_to_user" : "queued_for_digest",
+          item_ref: item.content.slice(0, 100),
+        })
       }
       return {
-        decision: queuedIds.length > 0 ? "send" : "discard",
+        session_id: payload.session_id ?? payload.request_id,
         requestId: payload.request_id,
+        consultation_id: payload.request_id,
+        status: "resolved" as const,
+        decision: (queuedIds.length > 0 ? "send" : "discard") as "send" | "discard",
         approvedItemIds: queuedIds,
         queuedPushCount: queuedIds.length,
+        notes: `Queued ${queuedIds.length} items`,
+        actions_taken: actionsTaken,
+        continue: false,
       }
     })
 
     await (manager as any).handleIpcMessage("t_rss", {
       type: "consultation_request",
-      sender: "t_rss",
-      receiver: "brain",
+      tentacle_id: "t_rss",
+      message_id: "m1",
+      timestamp: new Date().toISOString(),
       payload: {
         tentacle_id: "t_rss",
         request_id: "req-batch-1",
         mode: "batch",
         summary: "Two new feed items",
         context: "RSS batch",
+        initial_message: "Two new feed items found",
+        item_count: 3,
+        urgency: "normal",
         items: [
           { id: "1", content: "AI feed item", tentacleJudgment: "important", reason: "high-signal", timestamp: new Date().toISOString() },
           { id: "2", content: "Reference item", tentacleJudgment: "reference", reason: "context", timestamp: new Date().toISOString() },
           { id: "3", content: "Ignore item", tentacleJudgment: "uncertain", reason: "weak", timestamp: new Date().toISOString() },
         ],
       },
-      timestamp: new Date().toISOString(),
-      message_id: "m1",
     })
 
     const archived = JSON.parse(fs.readFileSync(path.join(tentacleDir, "sessions", "req-batch-1.json"), "utf-8"))
     const pending = await outbound.getPending()
 
+    // Per protocol: reply first, then close
     expect(sentReplies[0].type).toBe("consultation_reply")
     expect(sentReplies[0].payload.approvedItemIds).toEqual(["req-batch-1:1", "req-batch-1:2"])
+    expect(sentReplies[0].payload.actions_taken).toHaveLength(2)
+    expect(sentReplies[0].payload.actions_taken[0].action).toBe("pushed_to_user")
+    expect(sentReplies[1].type).toBe("consultation_close")
+    expect(sentReplies[1].payload.pushed_count).toBe(1) // only "important" items count as pushed
     expect(archived.request.mode).toBe("batch")
     expect(pending).toHaveLength(2)
   })
@@ -108,32 +126,43 @@ describe("integration: consultation queue", () => {
       })
       await outbound.addApprovedItem(approved)
       return {
-        decision: "send",
+        session_id: payload.session_id ?? payload.request_id,
         requestId: payload.request_id,
+        consultation_id: payload.request_id,
+        status: "waiting_user" as const,
+        decision: "send" as const,
         approvedItemIds: [approved.itemId],
         queuedPushCount: 1,
+        notes: "Action requires user confirmation",
+        actions_taken: [{
+          action: "pushed_to_user" as const,
+          item_ref: approved.content.slice(0, 100),
+        }],
+        continue: false,
       }
     })
 
     for (const [requestId, content] of [["draft-1", "Article v1"], ["draft-2", "Article v2 with more examples"]] as const) {
       await (manager as any).handleIpcMessage("t_writer", {
         type: "consultation_request",
-        sender: "t_writer",
-        receiver: "brain",
+        tentacle_id: "t_writer",
+        message_id: requestId,
+        timestamp: new Date().toISOString(),
         payload: {
           tentacle_id: "t_writer",
           request_id: requestId,
           mode: "action_confirm",
           summary: "Need user confirmation before publishing",
           context: "Draft article review",
+          initial_message: `Need confirmation to publish: ${content}`,
+          item_count: 1,
+          urgency: "normal",
           action: {
             type: "publish_article",
             description: "Publish to workspace",
             content,
           },
         },
-        timestamp: new Date().toISOString(),
-        message_id: requestId,
       })
     }
 

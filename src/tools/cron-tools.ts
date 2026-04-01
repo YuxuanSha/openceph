@@ -25,7 +25,7 @@ export function createCronTools(cronScheduler: CronScheduler): ToolRegistryEntry
   const cronAdd: ToolDefinition = {
     name: "cron_add",
     label: "Cron Add",
-    description: "创建定时任务",
+    description: "Create a scheduled job",
     parameters: Type.Object({
       name: Type.String(),
       schedule: scheduleSchema,
@@ -59,7 +59,7 @@ export function createCronTools(cronScheduler: CronScheduler): ToolRegistryEntry
   const cronList: ToolDefinition = {
     name: "cron_list",
     label: "Cron List",
-    description: "列出所有定时任务",
+    description: "List all scheduled jobs",
     parameters: Type.Object({
       enabled_only: Type.Optional(Type.Boolean({ default: false })),
       tentacle_id: Type.Optional(Type.String()),
@@ -77,7 +77,7 @@ export function createCronTools(cronScheduler: CronScheduler): ToolRegistryEntry
   const cronUpdate: ToolDefinition = {
     name: "cron_update",
     label: "Cron Update",
-    description: "修改定时任务",
+    description: "Update a scheduled job",
     parameters: Type.Object({
       job_id: Type.String(),
       patch: Type.Object({
@@ -106,7 +106,7 @@ export function createCronTools(cronScheduler: CronScheduler): ToolRegistryEntry
   const cronRemove: ToolDefinition = {
     name: "cron_remove",
     label: "Cron Remove",
-    description: "删除定时任务",
+    description: "Remove a scheduled job",
     parameters: Type.Object({
       job_id: Type.String(),
     }),
@@ -119,7 +119,7 @@ export function createCronTools(cronScheduler: CronScheduler): ToolRegistryEntry
   const cronRun: ToolDefinition = {
     name: "cron_run",
     label: "Cron Run",
-    description: "手动触发定时任务",
+    description: "Manually trigger a scheduled job",
     parameters: Type.Object({
       job_id: Type.String(),
       mode: Type.Optional(Type.Union([Type.Literal("force"), Type.Literal("due")], { default: "force" })),

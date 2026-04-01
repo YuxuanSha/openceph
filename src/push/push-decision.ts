@@ -247,7 +247,7 @@ export class PushDecisionEngine {
     if (this.memoryManager) {
       try {
         const memory = await this.memoryManager.readMemory(undefined, "push")
-        if (/不要打扰|少推送|busy|忙/i.test(memory)) return false
+        if (/do not disturb|busy|don't disturb|stop notifications|quiet hours|fewer pushes/i.test(memory)) return false
       } catch {
         // ignore memory read failure
       }

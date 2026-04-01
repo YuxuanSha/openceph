@@ -67,7 +67,7 @@ describe("invoke_code_agent tool", () => {
 
     const payload = JSON.parse(result.content[0].text)
     expect(payload.success).toBe(false)
-    expect(payload.errors).toEqual(["部署失败: pip install failed"])
+    expect(payload.errors).toEqual(["Deployment failed: pip install failed"])
     expect(payload.reused_previous_session).toBe(true)
     expect(payload.previous_claude_session_id).toBe("claude-prev")
     expect(payload.current_claude_session_id).toBe("claude-current")

@@ -57,7 +57,7 @@ requires:
   env: [GITHUB_TOKEN, OPENROUTER_API_KEY]  # Required env vars
 
 # Discovery
-trigger_keywords: [GitHub, 仓库, Issue, PR]  # Match user intent
+trigger_keywords: [GitHub, repository, Issue, PR]  # Match user intent
 emoji: "🐙"                       # Display emoji
 
 # Optional metadata
@@ -74,22 +74,22 @@ After the frontmatter, describe the SKILL in markdown. This is what Claude Code 
 ```markdown
 # My Skill Name
 
-## 使命 (Mission)
+## Mission
 One-paragraph description of what this tentacle does.
 
-## 工作流 (Workflow)
+## Workflow
 Step-by-step description of the tentacle's main loop:
 1. Step one...
 2. Step two...
 3. ...
 
-## 上报策略 (Report Strategy)
+## Report Strategy
 When and how the tentacle reports to the Brain:
 - Urgent items: immediately
 - Normal items: batch when 3+ accumulated
 - Daily summary: at least once per day
 
-## 基础设施 (Infrastructure)
+## Infrastructure
 What the tentacle needs:
 - Local SQLite database
 - LLM calls via OpenRouter
@@ -153,22 +153,22 @@ emoji: "👁️"
 
 # My Monitor
 
-## 使命
+## Mission
 Monitor [data source] for changes and report significant findings.
 
-## 工作流
+## Workflow
 1. Poll data source every hour
 2. Compare with previous state (stored in local SQLite)
 3. Use LLM to assess significance of changes
 4. Accumulate significant findings
 5. When 3+ findings accumulated, batch report to Brain
 
-## 上报策略
+## Report Strategy
 - Critical changes: immediate single report
 - Normal findings: batch when 3+ accumulated
 - Daily summary even if no findings (heartbeat)
 
-## 基础设施
+## Infrastructure
 - SQLite for state tracking
 - LLM for significance assessment
 - HTTP client for data source API

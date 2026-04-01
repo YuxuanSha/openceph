@@ -77,7 +77,7 @@ describe("TentacleLifecycleManager", () => {
     expect(mgr.setTentacleSchedule).toHaveBeenCalledWith("t_test", expect.objectContaining({
       primaryTrigger: { type: "self-schedule", interval: "12h" },
     }))
-    expect(registry.updateStatus).toHaveBeenCalledWith("t_test", "weakened", { health: "削弱" })
+    expect(registry.updateStatus).toHaveBeenCalledWith("t_test", "weakened", { health: "weakened" })
   })
 
   it("weaken with explicit frequency", async () => {
@@ -110,7 +110,7 @@ describe("TentacleLifecycleManager", () => {
     expect(mgr.setTentacleSchedule).toHaveBeenCalledWith("t_test", expect.objectContaining({
       primaryTrigger: { type: "self-schedule", interval: "3h" },
     }))
-    expect(registry.updateStatus).toHaveBeenCalledWith("t_test", "running", { health: "良好" })
+    expect(registry.updateStatus).toHaveBeenCalledWith("t_test", "running", { health: "good" })
   })
 
   it("merge requires at least 2 tentacles", async () => {

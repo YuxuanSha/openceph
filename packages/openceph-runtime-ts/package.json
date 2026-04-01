@@ -1,0 +1,25 @@
+{
+  "name": "@openceph/runtime",
+  "version": "1.0.0",
+  "description": "OpenCeph TypeScript runtime SDK for skill_tentacles",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

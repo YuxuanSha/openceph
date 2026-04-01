@@ -20,7 +20,7 @@ export class HeartbeatTaskManager {
   async readTasks(): Promise<HeartbeatTask[]> {
     const content = await this.readOrInit()
     const tasks: HeartbeatTask[] = []
-    let currentSection = "待处理"
+    let currentSection = "Pending"
 
     for (const [index, line] of content.split("\n").entries()) {
       const sectionMatch = line.match(/^## (.+)$/)
@@ -90,7 +90,7 @@ export class HeartbeatTaskManager {
         return line
       }
 
-      if (/^- \[x\] /.test(line) && (currentSection === "每日必做" || currentSection === "每周任务")) {
+      if (/^- \[x\] /.test(line) && (currentSection === "Daily Tasks" || currentSection === "Weekly Tasks")) {
         return line.replace("- [x] ", "- [ ] ").replace(/\s+\(notes:.*\)$/, "")
       }
 
@@ -103,20 +103,20 @@ export class HeartbeatTaskManager {
   private async readOrInit(): Promise<string> {
     if (!existsSync(this.heartbeatPath)) {
       await fs.mkdir(this.workspaceDir, { recursive: true })
-      await fs.writeFile(this.heartbeatPath, "# HEARTBEAT.md\n\n## 每日必做\n\n## 每周任务\n\n## 待处理\n", "utf-8")
+      await fs.writeFile(this.heartbeatPath, "# HEARTBEAT.md\n\n## Daily Tasks\n\n## Weekly Tasks\n\n## Pending\n", "utf-8")
     }
     return fs.readFile(this.heartbeatPath, "utf-8")
   }
 }
 
 function defaultSectionForSchedule(schedule: "daily" | "weekly" | "once"): string {
-  if (schedule === "daily") return "每日必做"
-  if (schedule === "weekly") return "每周任务"
-  return "待处理"
+  if (schedule === "daily") return "Daily Tasks"
+  if (schedule === "weekly") return "Weekly Tasks"
+  return "Pending"
 }
 
 function inferSchedule(section: string): "daily" | "weekly" | "once" {
-  if (section === "每日必做") return "daily"
-  if (section === "每周任务") return "weekly"
+  if (section === "Daily Tasks") return "daily"
+  if (section === "Weekly Tasks") return "weekly"
   return "once"
 }

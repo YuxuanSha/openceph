@@ -24,20 +24,11 @@ export function createCodeTools(opts: {
   const invokeCodeAgent: ToolDefinition = {
     name: "invoke_code_agent",
     label: "Invoke Code Agent",
-    description: "生成并落盘新的触手代码（完整 Agent 系统），不会自动宣称已运行；只有 spawned=true 时才表示已启动",
+    description: "Generate and write new tentacle code (complete Agent system) to disk; does not automatically claim it is running — only spawned=true indicates it has started",
     parameters: Type.Object({
       tentacle_id: Type.String(),
-      purpose: Type.String({ description: "触手使命" }),
-      workflow: Type.Optional(Type.String({ description: "工作流描述" })),
-      capabilities: Type.Optional(Type.Array(Type.String())),
-      report_strategy: Type.Optional(Type.String()),
-      infrastructure: Type.Optional(Type.Object({
-        needsHttpServer: Type.Optional(Type.Boolean()),
-        needsDatabase: Type.Optional(Type.Boolean()),
-        needsLlm: Type.Optional(Type.Boolean()),
-        needsFileStorage: Type.Optional(Type.Boolean()),
-      })),
-      external_apis: Type.Optional(Type.Array(Type.String())),
+      purpose: Type.String({ description: "Tentacle mission" }),
+      brief: Type.Optional(Type.String({ description: "Requirement description — write clearly in natural language what is needed" })),
       preferred_runtime: Type.Optional(Type.Union([
         Type.Literal("python"),
         Type.Literal("typescript"),
@@ -55,11 +46,7 @@ export function createCodeTools(opts: {
         const requirement: CodeAgentRequirement = {
           tentacleId: params.tentacle_id,
           purpose: params.purpose,
-          workflow: params.workflow ?? params.purpose,
-          capabilities: params.capabilities ?? [],
-          reportStrategy: params.report_strategy ?? "Report findings in batch when 3+ items accumulated",
-          infrastructure: params.infrastructure,
-          externalApis: params.external_apis,
+          brief: params.brief ?? "",
           preferredRuntime: params.preferred_runtime ?? "auto",
           userContext: "",
         }
@@ -71,9 +58,7 @@ export function createCodeTools(opts: {
         try {
           directory = await deployer.deploy(params.tentacle_id, generated, {
             purpose: requirement.purpose,
-            workflow: requirement.workflow,
-            capabilities: requirement.capabilities,
-            reportStrategy: requirement.reportStrategy,
+            brief: requirement.brief,
           })
         } catch (error: any) {
           deployError = error.message
@@ -102,7 +87,7 @@ export function createCodeTools(opts: {
           spawned: false,
           runtime_status: "not_running",
           requires_explicit_run_confirmation: true,
-          next_step: "代码已生成/部署；如需运行，必须再执行显式 spawn 或 manage_tentacle resume/run_now，并检查 spawned/running 状态。",
+          next_step: "Code has been generated/deployed; to run it, you must explicitly perform a spawn or manage_tentacle resume/run_now and verify the spawned/running status.",
           description: generated.description,
           reused_previous_session: generated.diagnostics?.reusedPreviousSession ?? false,
           reuse_reason: generated.diagnostics?.reuseReason ?? "new_session",
@@ -123,7 +108,7 @@ export function createCodeTools(opts: {
             path: file.path,
             location: directory ? `${directory}/${file.path}` : undefined,
           })),
-          errors: deployError ? [`部署失败: ${deployError}`] : [],
+          errors: deployError ? [`Deployment failed: ${deployError}`] : [],
         }, null, 2))
       } catch (error: any) {
         if (

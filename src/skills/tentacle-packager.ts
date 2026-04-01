@@ -146,7 +146,7 @@ export class TentaclePackager {
       return targetDir
     }
 
-    throw new Error(`不支持的安装来源：${source}`)
+    throw new Error(`Unsupported install source: ${source}`)
   }
 
   /**
@@ -329,7 +329,7 @@ export class TentaclePackager {
       try {
         await extract(archivePath, { dir: tmpDir })
       } catch {
-        // Fallback: try tar for legacy .tentacle files
+        // Fallback: try tar for .tentacle archive files
         const { execFile } = await import("child_process")
         await new Promise<void>((resolve, reject) => {
           execFile("tar", ["-xzf", archivePath, "-C", tmpDir], { timeout: 30_000 }, (err) => {

@@ -97,6 +97,7 @@ describe("SkillSpawner tentacle routing", () => {
     const spawner = new SkillSpawner(makeConfig(), mockSkillLoader(), manager, codeAgent)
 
     const params: SpawnParams = {
+      mode: "create",
       tentacleId: "t_test",
       purpose: "test",
       workflow: "test workflow",
@@ -132,6 +133,7 @@ describe("SkillSpawner tentacle routing", () => {
     const spawner = new SkillSpawner(makeConfig(), mockSkillLoader([legacySkill]), manager, codeAgent)
 
     const params: SpawnParams = {
+      mode: "create",
       skillName: "legacy-monitor",
       tentacleId: "t_legacy",
       purpose: "test legacy",
@@ -183,6 +185,7 @@ describe("SkillSpawner tentacle routing", () => {
     const spawner = new SkillSpawner(makeConfig(), mockSkillLoader([skillEntry]), manager, codeAgent)
 
     const params: SpawnParams = {
+      mode: "deploy",
       skillName: "github-radar",
       tentacleId: "t_github_radar",
       purpose: "Monitor GitHub",
@@ -196,8 +199,8 @@ describe("SkillSpawner tentacle routing", () => {
       // May fail at deploy step but routing should be correct
     }
 
-    // skill_tentacle path calls deployExisting (not generateSkillTentacle)
-    expect(codeAgent.deployExisting).toHaveBeenCalled()
+    // Scene A (deploy): NEVER calls Code Agent
+    expect(codeAgent.deployExisting).not.toHaveBeenCalled()
     expect(codeAgent.generateSkillTentacle).not.toHaveBeenCalled()
     // Must call spawn and waitForRegistration
     expect(manager.spawn).toHaveBeenCalledWith("t_github_radar")
@@ -237,6 +240,7 @@ describe("SkillSpawner tentacle routing", () => {
     const spawner = new SkillSpawner(makeConfig(), mockSkillLoader([skillEntry]), manager, codeAgent)
 
     const result = await spawner.spawn({
+      mode: "deploy",
       skillName: "test-tentacle",
       tentacleId: "t_test_tentacle",
       purpose: "test",
@@ -286,6 +290,7 @@ describe("SkillSpawner tentacle routing", () => {
     const spawner = new SkillSpawner(makeConfig(), mockSkillLoader([skillEntry]), manager, codeAgent)
 
     const result = await spawner.spawn({
+      mode: "deploy",
       skillName: "timeout-tentacle",
       tentacleId: "t_timeout",
       purpose: "test",
@@ -316,6 +321,7 @@ describe("SkillSpawner tentacle routing", () => {
     // Pass skillTentaclePath directly — should not need skillName
     try {
       await spawner.spawn({
+        mode: "deploy",
         tentacleId: "t_local",
         purpose: "test local path",
         workflow: "test",
@@ -326,8 +332,8 @@ describe("SkillSpawner tentacle routing", () => {
       // May fail at deploy but routing is correct
     }
 
-    // deployExisting should be called (went through spawnFromSkillTentacle)
-    expect(codeAgent.deployExisting).toHaveBeenCalled()
+    // Scene A (deploy): NEVER calls Code Agent
+    expect(codeAgent.deployExisting).not.toHaveBeenCalled()
     expect(codeAgent.generateSkillTentacle).not.toHaveBeenCalled()
   })
 
@@ -369,6 +375,7 @@ describe("SkillSpawner tentacle routing", () => {
     )
 
     const result = await spawner.spawn({
+      mode: "deploy",
       skillName: "needs-env",
       tentacleId: "t_needs_env",
       purpose: "test",
@@ -422,6 +429,7 @@ describe("SkillSpawner tentacle routing", () => {
     )
 
     const result = await spawner.spawn({
+      mode: "deploy",
       skillName: "mapped-env",
       tentacleId: "t_mapped_env",
       purpose: "test",
@@ -432,7 +440,8 @@ describe("SkillSpawner tentacle routing", () => {
     expect(result.success).toBe(true)
     const envFile = fs.readFileSync(path.join(dir, "tentacles", "t_mapped_env", ".env"), "utf-8")
     expect(envFile).toContain("OPENROUTER_API_KEY=sk-or-test-value")
-    expect(codeAgent.deployExisting).toHaveBeenCalled()
+    // Scene A (deploy): NEVER calls Code Agent
+    expect(codeAgent.deployExisting).not.toHaveBeenCalled()
     expect((credentialStore.get as any).mock.calls.map((call: [string]) => call[0])).toContain("openrouter")
   })
 
@@ -526,6 +535,7 @@ describe("SkillSpawner tentacle routing", () => {
     const spawner = new SkillSpawner(config, mockSkillLoader([skillEntry]), manager, codeAgent)
 
     const result = await spawner.spawn({
+      mode: "deploy",
       skillName: "config-env",
       tentacleId: "t_config_env",
       purpose: "test",
@@ -576,6 +586,7 @@ describe("SkillSpawner tentacle routing", () => {
     const spawner = new SkillSpawner(makeConfig(), mockSkillLoader([skillEntry]), manager, codeAgent)
 
     const result = await spawner.spawn({
+      mode: "deploy",
       skillName: "readme-command",
       tentacleId: "t_readme_command",
       purpose: "test",
@@ -664,6 +675,7 @@ describe("SkillSpawner tentacle routing", () => {
       } as any)
 
     const result = await spawner.spawn({
+      mode: "create",
       tentacleId: "t_recover",
       purpose: "recover test",
       workflow: "recover test workflow",

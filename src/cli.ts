@@ -2,7 +2,7 @@
 
 import { Command } from "commander"
 import * as fs from "fs/promises"
-import { existsSync, mkdirSync, readFileSync, copyFileSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, copyFileSync, writeFileSync } from "fs"
 import * as path from "path"
 import * as os from "os"
 import * as crypto from "crypto"
@@ -62,6 +62,54 @@ async function createCronServices() {
   }
 }
 
+// ─── openceph-runtime preinstall ─────────────────────────────────
+
+async function initOpencephRuntime(): Promise<void> {
+  const { exec } = await import("child_process")
+  const { promisify } = await import("util")
+  const execAsync = promisify(exec)
+
+  // Find openceph-runtime source — try dist/ first, then src/ (dev)
+  const runtimeSrcDir = [
+    path.join(__dirname, "..", "packages", "openceph-runtime"),
+    path.join(__dirname, "..", "..", "packages", "openceph-runtime"),
+  ].find((p) => existsSync(path.join(p, "pyproject.toml")))
+
+  if (!runtimeSrcDir) {
+    console.warn("  ⚠ openceph-runtime source not found, skipping preinstall")
+    return
+  }
+
+  const packagesDir = path.join(OPENCEPH_HOME, "packages")
+  await fs.mkdir(packagesDir, { recursive: true })
+
+  console.log("  Building openceph-runtime package...")
+  try {
+    // Try building a wheel first (fastest install later)
+    await execAsync(
+      `python3 -m pip wheel --no-deps --wheel-dir "${packagesDir}" "${runtimeSrcDir}"`,
+      { timeout: 60_000 },
+    )
+    console.log("  ✓ openceph-runtime wheel built")
+  } catch {
+    // Wheel build needs network (for setuptools). Fallback: build sdist tarball locally.
+    try {
+      await execAsync(
+        `cd "${runtimeSrcDir}" && python3 -m build --sdist --outdir "${packagesDir}"`,
+        { timeout: 60_000 },
+      )
+      console.log("  ✓ openceph-runtime sdist built")
+    } catch {
+      // Last resort: copy source so skill-spawner can pip install from it
+      console.warn("  ⚠ package build failed, copying source as fallback")
+      const fallbackDir = path.join(packagesDir, "openceph-runtime")
+      await fs.rm(fallbackDir, { recursive: true, force: true }).catch(() => {})
+      await fs.cp(runtimeSrcDir, fallbackDir, { recursive: true })
+      console.log("  ✓ openceph-runtime source copied to packages/")
+    }
+  }
+}
+
 // ─── openceph init ───────────────────────────────────────────────
 
 program
@@ -113,10 +161,35 @@ program
     if (existsSync(actualWorkspaceSrc)) {
       const templateFiles = await fs.readdir(actualWorkspaceSrc)
       for (const file of templateFiles) {
+        const src = path.join(actualWorkspaceSrc, file)
         const dest = path.join(workspaceDest, file)
         if (!existsSync(dest)) {
-          copyFileSync(path.join(actualWorkspaceSrc, file), dest)
+          const stat = await fs.stat(src)
+          if (stat.isDirectory()) {
+            await fs.cp(src, dest, { recursive: true })
+          } else {
+            copyFileSync(src, dest)
+          }
         }
+      }
+
+      // Version-aware migration: overwrite managed prompt files when template version changes
+      const TEMPLATE_VERSION = "1.0.2"
+      const versionFile = path.join(workspaceDest, ".template-version")
+      let currentVersion = ""
+      try { currentVersion = readFileSync(versionFile, "utf-8").trim() } catch {}
+      if (currentVersion !== TEMPLATE_VERSION) {
+        // Managed files: system-owned prompt templates that should be updated on upgrade
+        // NOT migrated: USER.md, MEMORY.md (user data), TOOLS.md (auto-generated), TENTACLES.md (live registry)
+        const managedFiles = ["HEARTBEAT.md", "BOOTSTRAP.md"]
+        for (const file of managedFiles) {
+          const src = path.join(actualWorkspaceSrc, file)
+          const dest = path.join(workspaceDest, file)
+          if (existsSync(src)) {
+            copyFileSync(src, dest)
+          }
+        }
+        writeFileSync(versionFile, TEMPLATE_VERSION, "utf-8")
       }
     } else {
       console.error(`Workspace templates not found: ${workspaceSrc}`)
@@ -136,9 +209,19 @@ program
     }
 
     const config = loadConfig()
+
+    // Initialize loggers before any code that might use systemLogger
+    initLoggers(config)
+
     if (config.builtinTentacles?.autoInstallOnInit !== false) {
       await initBuiltinTentacles(skillsDest, config.builtinTentacles?.skipList ?? [])
     }
+
+    // Copy contracts to ~/.openceph/contracts/
+    await installContracts()
+
+    // Pre-install openceph-runtime for Python tentacles
+    await initOpencephRuntime()
 
     // Generate gateway token
     const tokenPath = path.join(CREDENTIALS_DIR, "gateway_token")
@@ -155,7 +238,7 @@ program
     console.log("Next steps:")
     console.log("  1. openceph credentials set openrouter <YOUR_API_KEY>")
     console.log("  2. openceph start  (verify config)")
-    console.log('  3. openceph chat   (M1 阶段可用)')
+    console.log('  3. openceph chat   (interactive chat)')
   })
 
 program
@@ -170,7 +253,13 @@ program
     if (config.builtinTentacles?.autoUpgradeOnUpdate !== false) {
       await upgradeBuiltinTentacles(skillsDest, config.builtinTentacles?.skipList ?? [])
     }
+    // Refresh contracts to latest version
+    await refreshContracts()
+    // Re-build openceph-runtime wheel (new tentacles will pick up the update)
+    await initOpencephRuntime()
     console.log(`Builtin tentacles synced in ${skillsDest}`)
+    console.log(`Contracts refreshed in ${path.join(OPENCEPH_HOME, "contracts")}`)
+    console.log(`openceph-runtime updated in ${path.join(OPENCEPH_HOME, "packages")}`)
   })
 
 // ─── openceph start ──────────────────────────────────────────────
@@ -1080,13 +1169,13 @@ function parseTentaclesMd(content: string): { id: string; status: string; health
     let health: string | undefined
     let lastReport: string | undefined
 
-    const statusMatch = block.match(/(?:status:|- \*\*状态：\*\*)\s*(\S+)/)
+    const statusMatch = block.match(/(?:status:|- \*\*Status:\*\*)\s*(\S+)/)
     if (statusMatch) status = statusMatch[1]
 
-    const healthMatch = block.match(/(?:health:|- \*\*健康度：\*\*)\s*(\S+)/)
+    const healthMatch = block.match(/(?:health:|- \*\*Health:\*\*)\s*(\S+)/)
     if (healthMatch) health = healthMatch[1]
 
-    const reportMatch = block.match(/(?:lastReport:|- \*\*最后上报：\*\*)\s*(.+)/)
+    const reportMatch = block.match(/(?:lastReport:|- \*\*Last Report:\*\*)\s*(.+)/)
     if (reportMatch) lastReport = reportMatch[1].trim()
 
     results.push({ id, status, health, lastReport })
@@ -1357,7 +1446,7 @@ async function runDoctorChecks(fix: boolean): Promise<DoctorIssue[]> {
   } else {
     issues.push({ check: "Tentacles", status: "warn", message: `${crashed.length} crashed: ${crashed.map((t) => t.id).join(", ")}`, fixable: true })
     if (fix) {
-      const next = readFileSync(tentaclesPath, "utf-8").replace(/\*\*状态：\*\* crashed/g, "**状态：** running")
+      const next = readFileSync(tentaclesPath, "utf-8").replace(/\*\*Status:\*\* crashed/g, "**Status:** running")
       await fs.writeFile(tentaclesPath, next, "utf-8")
       issues[issues.length - 1] = { check: "Tentacles", status: "ok", message: `recovered ${crashed.length} tentacle record(s)` }
     }
@@ -1428,6 +1517,36 @@ async function writePluginOperation(payload: { type: "install" | "uninstall"; pa
 
 export function getBuiltinTentaclesDir(): string {
   return path.join(__dirname, "..", "builtin-tentacles")
+}
+
+function getContractsSourceDir(): string {
+  // Try dist layout first, then source layout
+  const distContracts = path.join(__dirname, "..", "contracts")
+  const srcContracts = path.join(__dirname, "..", "..", "contracts")
+  if (existsSync(distContracts)) return distContracts
+  return srcContracts
+}
+
+export async function installContracts(): Promise<void> {
+  const sourceDir = getContractsSourceDir()
+  if (!(await pathExists(sourceDir))) {
+    try { systemLogger.info("contracts_skip", { reason: "source_not_found", path: sourceDir }) } catch {}
+    return
+  }
+  const targetDir = path.join(OPENCEPH_HOME, "contracts")
+  await fs.mkdir(targetDir, { recursive: true })
+  await fs.cp(sourceDir, targetDir, { recursive: true })
+  try { systemLogger.info("contracts_installed", { source: sourceDir, target: targetDir }) } catch {}
+}
+
+export async function refreshContracts(): Promise<void> {
+  const sourceDir = getContractsSourceDir()
+  if (!(await pathExists(sourceDir))) return
+  const targetDir = path.join(OPENCEPH_HOME, "contracts")
+  await fs.mkdir(targetDir, { recursive: true })
+  // Overwrite existing contracts with latest version
+  await fs.cp(sourceDir, targetDir, { recursive: true })
+  try { systemLogger.info("contracts_refreshed", { source: sourceDir, target: targetDir }) } catch {}
 }
 
 async function readSkillVersion(skillDir: string): Promise<string> {

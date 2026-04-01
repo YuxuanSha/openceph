@@ -144,8 +144,8 @@ export class Gateway {
           return
         } catch { /* try next */ }
       }
-      // Last resort: log to stdout
-      console.log(`[Ceph → ${target.recipientId ?? target.senderId}] ${content.text}`)
+      // Last resort: log to structured logger
+      gatewayLogger.warn("message_no_channel", { recipient: target.recipientId ?? target.senderId, text: content.text })
       return
     }
 

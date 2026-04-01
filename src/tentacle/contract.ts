@@ -1,25 +1,85 @@
+/**
+ * OpenCeph IPC Contract
+ *
+ * Defines all message types and payloads for tentacle ↔ Brain IPC.
+ * Uses JSON-line format (one JSON object per line).
+ *
+ * NOTE: This file contains BOTH classic IPC types (for backward compatibility
+ * with existing infrastructure) AND newer protocol types (for the
+ * skill-tentacle protocol spec).
+ */
+
 export type IpcMessageType =
   | "tentacle_register"
   | "report_finding"
   | "consultation_request"
   | "consultation_reply"
   | "consultation_done"
+  | "consultation_message"
+  | "consultation_end"
+  | "consultation_close"
   | "directive"
   | "heartbeat_trigger"
   | "heartbeat_result"
+  | "heartbeat_ping"
+  | "heartbeat_ack"
+  | "tool_request"
+  | "tool_result"
+  | "status_update"
 
 export interface IpcMessage {
   type: IpcMessageType
-  sender: string
-  receiver: string
+  sender?: string
+  receiver?: string
+  tentacle_id?: string
   payload: unknown
   timestamp: string
   message_id: string
 }
 
+export function createIpcMessage(
+  type: IpcMessageType,
+  tentacleId: string,
+  payload: unknown,
+): IpcMessage {
+  return {
+    type,
+    sender: "brain",
+    receiver: tentacleId,
+    tentacle_id: tentacleId,
+    payload,
+    timestamp: new Date().toISOString(),
+    message_id: crypto.randomUUID(),
+  }
+}
+
+// ─── Shared Enums ───────────────────────────────────────────────
+
+/** Classic consultation mode values (kept for backward compatibility). */
+export type LegacyConsultationMode = "single" | "batch" | "action_confirm"
+
+/** New protocol mode values. */
+export type ConsultationMode = "batch" | "eager" | "passive"
+
+/** Per spec §4.1 — actions_taken[].action in consultation_reply. */
+export type ConsultationAction = "pushed_to_user" | "queued_for_digest"
+
+/** Per spec §4.3 — directive.action values. */
+export type DirectiveAction = "pause" | "resume" | "kill" | "run_now" | "config_update" | "flush_pending"
+
+// ─── Tentacle → Brain Payloads ──────────────────────────────────
+
 export interface TentacleRegisterPayload {
   purpose: string
   runtime: string
+  pid?: number
+  capabilities?: {
+    daemon: string[]
+    agent: string[]
+    consultation: { mode: ConsultationMode; batchThreshold?: number }
+  }
+  tools?: string[]
+  version?: string
 }
 
 export interface ReportFindingPayload {
@@ -64,9 +124,7 @@ export interface HeartbeatResultPayload {
   }>
 }
 
-// M3: Consultation batch mode types
-
-export type ConsultationMode = "single" | "batch" | "action_confirm"
+// ─── Consultation batch mode types ────────────────────────────────
 
 export interface ConsultationItem {
   id: string
@@ -83,7 +141,7 @@ export interface ConsultationRequestPayload {
   session_id?: string
   parent_request_id?: string
   turn?: number
-  mode: ConsultationMode
+  mode: LegacyConsultationMode
   items?: ConsultationItem[]
   action?: {
     type: string
@@ -92,6 +150,10 @@ export interface ConsultationRequestPayload {
   }
   summary: string
   context: string
+  // New protocol fields (optional for backward compat)
+  initial_message?: string
+  item_count?: number
+  urgency?: "urgent" | "normal" | "low"
 }
 
 export interface ConsultationReplyPayload {
@@ -104,19 +166,63 @@ export interface ConsultationReplyPayload {
   notes: string
   questions?: string[]
   next_action?: "await_user" | "await_tentacle" | "none"
+  // New protocol fields (optional for backward compat)
+  consultation_id?: string
+  client_request_id?: string  // original request_id from the tentacle's consultation_request
+  message?: string
+  actions_taken?: Array<{
+    action: ConsultationAction
+    item_ref: string
+    push_id?: string
+  }>
+  continue?: boolean
 }
 
 export interface ConsultationSessionState {
   session_id: string
   tentacle_id: string
-  mode: ConsultationMode
+  mode: LegacyConsultationMode
   status: "open" | "waiting_user" | "waiting_tentacle" | "resolved" | "closed"
   turn: number
   created_at: string
   updated_at: string
 }
 
-// M3: Tentacle capability types
+// ─── New protocol types (skill-tentacle spec) ────────────────────
+
+export interface ConsultationMessagePayload {
+  consultation_id: string
+  message: string
+}
+
+export interface ConsultationEndPayload {
+  consultation_id: string
+  reason?: string
+}
+
+export interface ConsultationClosePayload {
+  consultation_id: string
+  client_request_id?: string  // original request_id from the tentacle's consultation_request
+  summary: string
+  pushed_count: number
+  discarded_count: number
+  feedback?: string
+}
+
+export interface ToolRequestPayload {
+  tool_name: string
+  tool_call_id: string
+  arguments: Record<string, unknown>
+}
+
+export interface ToolResultPayload {
+  tool_call_id: string
+  result: Record<string, unknown>
+  success: boolean
+  error?: string
+}
+
+// ─── Tentacle capability types ───────────────────────────────────
 
 export type TentacleCapability =
   | "web_search"
@@ -130,3 +236,6 @@ export type TentacleCapability =
   | "action_execution"
   | "database"
   | "media_processing"
+  | "rss_fetch"
+  | "content_analysis"
+  | "quality_judgment"

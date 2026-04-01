@@ -41,7 +41,7 @@ export class CommandHandler {
     const executor = this.commands.get(cmd)
     if (!executor) {
       // Check if it's a directive embedded in a message
-      // e.g., "/model haiku 帮我分析这个问题"
+      // e.g., "/model haiku help me analyze this problem"
       const directive = this.commands.get(cmd)
       if (!directive) return null
     }

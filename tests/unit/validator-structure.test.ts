@@ -101,7 +101,7 @@ if TRIGGER_MODE == "self":
     const result = await validator.validateSkillTentacle(dir)
     expect(result.passed).toBe(false)
     const allErrors = Object.values(result.checks).flatMap(c => c?.errors ?? [])
-    expect(allErrors.some(e => e.message.includes("过短") || e.message.includes("short"))).toBe(true)
+    expect(allErrors.some(e => e.message.includes("short") || e.message.includes("short"))).toBe(true)
   })
 
   it("fails when README.md is missing", async () => {

@@ -19,20 +19,20 @@ describe("MemoryManager", () => {
   })
 
   it("supports write search update delete lifecycle", async () => {
-    const memoryId = await manager.writeMemory("喜欢乌龙茶", "用户偏好", ["drink"])
+    const memoryId = await manager.writeMemory("Likes oolong tea", "User preference", ["drink"])
 
-    const searchResults = await manager.searchMemory("乌龙茶")
+    const searchResults = await manager.searchMemory("oolong")
     expect(searchResults.length).toBeGreaterThan(0)
     expect(searchResults[0].memoryId).toBe(memoryId)
 
     await manager.distillMemory(new Date().toISOString().slice(0, 10))
     let memoryMd = fs.readFileSync(path.join(dir, "MEMORY.md"), "utf-8")
     expect(memoryMd).toContain(memoryId)
-    expect(memoryMd).toContain("喜欢乌龙茶")
+    expect(memoryMd).toContain("Likes oolong tea")
 
-    await manager.updateMemory(memoryId, "喜欢冷泡乌龙茶")
+    await manager.updateMemory(memoryId, "Likes cold-brewed oolong tea")
     memoryMd = fs.readFileSync(path.join(dir, "MEMORY.md"), "utf-8")
-    expect(memoryMd).toContain("喜欢冷泡乌龙茶")
+    expect(memoryMd).toContain("Likes cold-brewed oolong tea")
 
     await manager.deleteMemory(memoryId)
     memoryMd = fs.readFileSync(path.join(dir, "MEMORY.md"), "utf-8")

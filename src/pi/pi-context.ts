@@ -48,7 +48,7 @@ export async function createPiContext(config: OpenCephConfig): Promise<PiContext
   // 5. SettingsManager (private constructor — use static factory)
   const settingsManager = SettingsManager.create(workspaceDir, agentDir)
 
-  // 6. DefaultResourceLoader with M1 extensions
+  // 6. DefaultResourceLoader with brain extensions
   const extensionsDir = path.join(__dirname, "..", "brain", "extensions")
   const extensionPaths = [
     path.join(extensionsDir, "memory-injector.js"),

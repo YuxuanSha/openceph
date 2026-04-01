@@ -10,7 +10,7 @@ describe("HeartbeatTaskManager", () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "openceph-heartbeat-test-"))
-    fs.writeFileSync(path.join(dir, "HEARTBEAT.md"), "# HEARTBEAT.md\n\n## 待处理\n", "utf-8")
+    fs.writeFileSync(path.join(dir, "HEARTBEAT.md"), "# HEARTBEAT.md\n\n## Pending\n", "utf-8")
     manager = new HeartbeatTaskManager(dir)
   })
 
@@ -19,12 +19,12 @@ describe("HeartbeatTaskManager", () => {
   })
 
   it("creates and completes tasks", async () => {
-    await manager.addTask("监控 Anthropic 更新", "once")
+    await manager.addTask("Monitor Anthropic updates", "once")
     let tasks = await manager.readTasks()
-    expect(tasks.some((task) => task.text === "监控 Anthropic 更新")).toBe(true)
+    expect(tasks.some((task) => task.text === "Monitor Anthropic updates")).toBe(true)
 
-    await manager.completeTask("监控 Anthropic 更新", "done")
+    await manager.completeTask("Monitor Anthropic updates", "done")
     tasks = await manager.readTasks()
-    expect(tasks.find((task) => task.text === "监控 Anthropic 更新")?.completed).toBe(true)
+    expect(tasks.find((task) => task.text === "Monitor Anthropic updates")?.completed).toBe(true)
   })
 })
