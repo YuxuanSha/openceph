@@ -13,8 +13,8 @@
     "defaults": {
       "workspace": "~/.openceph/workspace",
       "model": {
-        "primary": "anthropic/claude-sonnet-4-5",
-        "fallbacks": ["openai/gpt-4o"]
+        "primary": "openrouter/anthropic/claude-sonnet-4-6",
+        "fallbacks": ["openrouter/openai/gpt-5.4"]
       },
       "userTimezone": "UTC"
     }
