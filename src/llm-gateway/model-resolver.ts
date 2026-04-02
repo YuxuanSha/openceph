@@ -2,6 +2,7 @@ import type { OpenCephConfig } from "../config/config-schema.js"
 import type { PiContext } from "../pi/pi-context.js"
 import { AuthProfileManager } from "../gateway/auth/auth-profiles.js"
 import { systemLogger } from "../logger/index.js"
+import { resolveModelRoute } from "../config/model-route-resolver.js"
 
 export interface ResolvedModel {
   provider: string
@@ -66,6 +67,12 @@ export class ModelResolver {
       ...(brainAuth.order as Record<string, string[]>),
       ...((tentacle.auth?.order ?? {}) as Record<string, string[]>),
     }
+
+    // Smart route: reroute models through available providers
+    if (this.primaryModel) {
+      this.primaryModel = resolveModelRoute(this.primaryModel, this.authProfiles)
+    }
+    this.fallbackModels = this.fallbackModels.map((fb) => resolveModelRoute(fb, this.authProfiles))
 
     // Same AuthProfileManager instance as Brain/Gateway → unified cooldown/failover state
     this.authProfileManager = authProfileManager

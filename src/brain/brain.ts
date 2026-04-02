@@ -2,6 +2,7 @@ import { createBrainSession, type BrainSession } from "../pi/pi-session.js"
 import type { PiContext } from "../pi/pi-context.js"
 import { resolveRunnableModel } from "../pi/model-resolver.js"
 import type { OpenCephConfig } from "../config/config-schema.js"
+import { resolveModelRoute } from "../config/model-route-resolver.js"
 import { SessionStoreManager } from "../session/session-store.js"
 import { ToolRegistry } from "../tools/index.js"
 import { createMemoryTools } from "../tools/memory-tools.js"
@@ -132,7 +133,8 @@ export class Brain {
     this.config = options.config
     this.piCtx = options.piCtx
     this.deliverToUser = options.deliverToUser
-    this.currentModel = options.config.agents.defaults.model.primary
+    const authProfiles = (options.config.auth?.profiles ?? {}) as Record<string, { mode?: string; apiKey?: string }>
+    this.currentModel = resolveModelRoute(options.config.agents.defaults.model.primary, authProfiles)
     this.sessionStore = new SessionStoreManager("ceph")
     this.toolRegistry = new ToolRegistry()
     this.ipcServer = new IpcServer(options.config.tentacle.ipcSocketPath)
@@ -1021,10 +1023,10 @@ export class Brain {
   async getSelectedModel(sessionKey?: string): Promise<string> {
     const key = sessionKey?.trim() || this.currentSessionKey
     if (!key) {
-      return this.config.agents.defaults.model.primary
+      return this.currentModel
     }
     const entry = await this.sessionStore.get(key)
-    return entry?.model ?? this.config.agents.defaults.model.primary
+    return entry?.model ?? this.currentModel
   }
 
   get thinkingLevel(): ThinkingLevel {
